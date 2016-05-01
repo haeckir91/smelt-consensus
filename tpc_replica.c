@@ -62,6 +62,9 @@ typedef struct tpc_replica_t{
     uint8_t started_from_id;
     uint8_t *cores;
     uint8_t current_core;
+
+    // smlt related
+    struct smlt_context* ctx;
 } tpc_replica_t;
 
 
@@ -101,7 +104,7 @@ static void print_results_tpc(tpc_replica_t* rep) {
 
     init_stats(&avg);
     char* f_name = (char*) malloc(sizeof(char)*100);
-#ifdef LIBSYNC
+#ifdef SMELT
     sprintf(f_name, "results/tp_%s_tpc_num_%d_numc_%d", topo_get_name(), 
             rep->num_replicas, rep->num_clients);
 #else
@@ -189,7 +192,7 @@ static void message_handler_tpc(uintptr_t *msg)
     }
 }
 
-#ifdef LIBSYNC
+#ifdef SMLT
 
 bool is_client(int n) 
 {
@@ -203,9 +206,12 @@ bool is_client(int n)
 
 void message_handler_loop_tpc(void)
 {
+    struct smlt_node node;
+    errval_t err;
+
+    struct smlt_msg* message = smlt_message_alloc(56);
     if (tpc_replica.id == 0) {
         int j = 0;
-        uintptr_t* message = (uintptr_t*) malloc(sizeof(uintptr_t)*8);
         int child_count[tpc_replica.num_clients];
         
         int num_c;
@@ -225,16 +231,19 @@ void message_handler_loop_tpc(void)
 
 
         while (true) {
-            if (mp_can_receive(cores[j])) {
+            // TODO implement can recv
+            if (true) {
+                node = smlt_node_get_by_id(cores[j])
+                err = smlt_node_recv(node, message);      
                 mp_receive7(cores[j], message);
-                if (get_tag(&message[0]) == SETUP_TAG) {
+                if (get_tag(&message->data[0]) == SETUP_TAG) {
                     message_handler_tpc(message);
                 } else {
                     if (!is_client(cores[j])) {
-                       child_count[get_client_id(&message[0])]++;                    
-                       if (child_count[get_client_id(&message[0])] == (num_c)) {
-                            child_count[get_client_id(&message[0])] = 0;
-                            set_tag(&message[0], TPC_RDY);
+                       child_count[get_client_id(&message->data[0])]++;                    
+                       if (child_count[get_client_id(&message->data[0])] == (num_c)) {
+                            child_count[get_client_id(&message->data[0])] = 0;
+                            set_tag(&message->data[0], TPC_RDY);
                             message_handler_tpc(message);
                        } 
                     } else {
@@ -250,14 +259,12 @@ void message_handler_loop_tpc(void)
         }
     
     } else {
-        uintptr_t* message = (uintptr_t*) malloc(sizeof(uintptr_t)*8);
         while (true) {
-            mp_receive_forward7(message);
-            if (get_tag(message) == TPC_PREP) {
-                set_tag(message, TPC_RDY);
-                mp_reduce7(message, message[0], message[1], 
-                       message[2], message[3], message[4],
-                       message[5], message[6]);
+            // TODO context
+            smlt_broadcast(ctx, message);
+            if (get_tag(message->data[0]) == TPC_PREP) {
+                set_tag(message->data[0], TPC_RDY);
+                smlt_reduction(ctx, message);
             } else {
                 message_handler_tpc(message);
             }

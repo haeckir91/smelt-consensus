@@ -1,0 +1,27 @@
+Dependencies
+--------------------------------------------------
+
+* recent libnuma (I used 2.0.8, which I was compiling separately)
+    the path to libnuma then needs to be specified in the Makefile, l.9
+
+Compile
+--------------------------------------------------
+
+$ make pt_bench_pairs_ump
+
+Execute
+--------------------------------------------------
+
+From the main directory:
+$ scripts/pairwise.py
+
+If you compiled your own libnuma:
+$ LD_LIBRARY_PATH=/path/to/libnuma scripts/pairwise.py
+
+This will generate output files /tmp/send and /tmp/receive
+
+Problems
+--------------------------------------------------
+
+Talk to Stefan Kaestle
+

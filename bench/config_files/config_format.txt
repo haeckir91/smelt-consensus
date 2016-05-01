@@ -1,0 +1,6 @@
+2 #num_replicas
+2 #node_size
+1 #num_clients
+0 1   #node0 cores
+2 3   #node1 cores
+4     #client_cores

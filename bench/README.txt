@@ -14,8 +14,9 @@ The Protocols are encoded in the following way
 -TPC = 1
 -BROAD = 2
 -CHAIN = 3
--SHM = 4
--NONE = 5
+-RAFT = 4
+-SHM = 5
+-NONE = 6
 Only certain combinations work at the moment (TODO)
 1Paxos/SHM
 TPC/SHM

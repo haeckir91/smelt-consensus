@@ -70,6 +70,9 @@ static void* (*client_function) (void*);
 extern struct smlt_context* ctx;
 extern struct smlt_topology* topo;
 
+// TODO init this buffer!
+static __thread struct smlt_msg* buf;
+
 /*
  * Startup protocol function
  */
@@ -149,7 +152,7 @@ static void init_protocol_node(uint8_t algorithm)
     thr_args[0].replicas = com_node.cores;
     thr_args[0].clients = com_node.client_cores;
 
-    node = smlt_get_node_by_id(com_core.cores[0]);
+    node = smlt_get_node_by_id(com_node.cores[0]);
     err = smlt_node_start(node, replica_function, (void*) &thr_args[0]);
     if (smlt_err_is_fail(err)) {
         printf("Staring node failed \n");
@@ -183,8 +186,7 @@ static void init_protocol_node(uint8_t algorithm)
         thr_args[i].current_core = com_node.cores[i];
         thr_args[i].id = i;
 
-
-        node = smlt_get_node_by_id(com_core.cores[i]);
+        node = smlt_get_node_by_id(com_node.cores[i]);
         err = smlt_node_start(node, replica_function, (void*) &thr_args[i]);
         if (smlt_err_is_fail(err)) {
             printf("Staring node failed \n");
@@ -238,6 +240,7 @@ void com_layer_core_init(uint8_t algorithm,
         }
     }
 
+    buf = smlt_message_alloc(56);
     //mp_connect(current_core, cores[0]);
     com_core.init_done = true;
 }
@@ -303,7 +306,10 @@ void consensus_init(
     replica_function = init_replica;
     client_function = init_benchmark_client;
 #endif
-
+    
+    for (int i = 0; i < num_cores; i++) {
+        printf("Cores[%d] %d \n", i, cores[i]);
+    }
 
     com_node.algorithm = algorithm;
     com_node.cores = cores;
@@ -350,8 +356,6 @@ void consensus_init(
     }
 }
 
-// TODO init this buffer!
-static __thread struct smlt_msg buf;
 void com_layer_core_send_request(struct smlt_msg* msg)
 {
     errval_t err;
@@ -378,7 +382,7 @@ void com_layer_core_send_request(struct smlt_msg* msg)
             // TODO;
         }       
 
-        err = smlt_node_recv(node, &buf);
+        err = smlt_node_recv(node, buf);
         if (smlt_err_is_fail(err)) {
             // TODO;
         }       

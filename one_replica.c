@@ -335,6 +335,9 @@ void message_handler_loop_onepaxos(void)
         int num_cores = 2*replica.num_clients;
         while (true) {
             for (int i = 0; i < num_cores; i++) {
+                if (cores[i] == replica.current_core){
+                    continue;
+                }
                 if (smlt_can_recv(cores[i])) {
                     err = smlt_recv(cores[i], message);
                     if (cores[i] != (uint64_t) smlt_topology_node_get_id(node)) {
@@ -383,6 +386,10 @@ void message_handler_loop_onepaxos(void)
         }
 
         while (true) {
+            if (all_cores[j] == replica.current_core){
+                    continue;
+            }
+
             if (smlt_can_recv(all_cores[j])) {
                 err = smlt_recv(all_cores[j], message);
                 if (smlt_err_is_fail(err)) {

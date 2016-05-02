@@ -18,16 +18,14 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sched.h>
-
-#include <vector>
+#include <smlt.h>
+#include <smlt_message.h>
+#include <stdbool.h>
 
 #include "client.h"
 #include "consensus.h"
 #include "crc.h"
 #include "incremental_stats.h"
-#include "mp.h"
-#include "sync.h"
-#include "topo.h"
 
 typedef struct client_t{	
     int id;
@@ -44,10 +42,10 @@ typedef struct client_t{
 
     uint32_t last_rid;
     uintptr_t* last_payload;
-    uintptr_t* msg_buf;
+    struct smlt_msg* msg_buf;
 
     uint8_t current_leader;
-    bool first = true;
+    bool first;
     bool exit;
     uint8_t topo;
 
@@ -91,23 +89,27 @@ static void* measure_thread(void* args)
 
 int consensus_send_request(uintptr_t* payload)
 {
+    errval_t err;
     client->last_payload = payload;
     client->last_rid = client->request_count;
         
-    set_tag(&client->msg_buf[0], REQ_TAG);
-    set_client_id(&client->msg_buf[0], client->id);
-    set_request_id(&client->msg_buf[0], client->request_count);
-    client->msg_buf[4] = payload[0];
-    client->msg_buf[5] = payload[1];
-    client->msg_buf[6] = payload[2];
-    client->msg_buf[3] = client->recv_from;
+    set_tag(&client->msg_buf->data[0], REQ_TAG);
+    set_client_id(&client->msg_buf->data[0], client->id);
+    set_request_id(&client->msg_buf->data[0], client->request_count);
+    client->msg_buf->data[4] = payload[0];
+    client->msg_buf->data[5] = payload[1];
+    client->msg_buf->data[6] = payload[2];
+    client->msg_buf->data[3] = client->recv_from;
 
-    mp_send7(client->current_leader,
-             client->msg_buf[0], client->msg_buf[1], client->msg_buf[2], 
-             client->msg_buf[3], client->msg_buf[4], client->msg_buf[5], 
-             client->msg_buf[6]);
+    err = smlt_send(client->current_leader, client->msg_buf);
+    if (smlt_err_is_fail(err)) {
+        // TODO
+    }   
 
-    mp_receive7(client->recv_from, client->msg_buf);
+    err = smlt_recv(client->recv_from, client->msg_buf);
+    if (smlt_err_is_fail(err)) {
+        // TODO
+    }
     client->request_count++;
 
     return 0;
@@ -115,6 +117,8 @@ int consensus_send_request(uintptr_t* payload)
 
 int init_consensus_client(void)
 {
+    errval_t err;
+    client->first = true;
     if (client->setup_done) {
         return 0;
     }
@@ -122,39 +126,29 @@ int init_consensus_client(void)
     client->exit = false;
     client->current_run = 0;
     client->id = -1;
-    client->msg_buf = (uintptr_t*) calloc(10, sizeof(uintptr_t));
+    client->msg_buf = smlt_message_alloc(56);
     // set client information that is needed
     client->request_count = 0;
     client->id = -1;
     init_stats(&client->rt[0]);
 
-    mp_connect(client->current_core, client->current_leader); 
-
-#ifdef KVS
-    if (client->recv_from != client->current_leader) {
-        mp_connect(client->current_core, client->recv_from);
-    }
-#endif
-
-
     for (int i = 0; i < 6; i++) {
         init_stats(&(client->rt[i]));
     }
 
-    set_tag(&client->msg_buf[0], SETUP_TAG);
-    set_client_id(&client->msg_buf[0], client->current_core);
+    set_tag(&client->msg_buf->data[0], SETUP_TAG);
+    set_client_id(&client->msg_buf->data[0], client->current_core);
 
-    mp_send7(client->current_leader,
-             client->msg_buf[0],
-             client->msg_buf[1],
-             client->msg_buf[2],
-             client->msg_buf[3],
-             client->msg_buf[4],
-             client->msg_buf[5],
-             client->msg_buf[6]);    
+    err = smlt_send(client->current_leader, client->msg_buf);
+    if (smlt_err_is_fail(err)) {
+        // TODO
+    }
 
-    mp_receive7(client->current_leader, client->msg_buf);
-    client->id = client->msg_buf[4];
+    err = smlt_recv(client->current_leader, client->msg_buf);
+    if (smlt_err_is_fail(err)) {
+        // TODO
+    }
+    client->id = client->msg_buf->data[4];
 
     client->setup_done = true;
 
@@ -235,7 +229,7 @@ void set_request_id(uintptr_t* msg, uint32_t client_id)
 static void print_results_file(void) {
 
     char* f_name = (char*) malloc(sizeof(char)*100);
-#ifdef LIBSYNC
+#ifdef SMLT
     sprintf(f_name, "results/client_id_%d_algo_%d_below_%d_%s_num_%d", 
             client->id, client->algo, client->algo_below, 
             topo_get_name(), client->num_clients);
@@ -278,18 +272,6 @@ static __thread uintptr_t payload[3];
 void* init_benchmark_client(void* args) 
 {
     benchmark_client_args_t* cl = (benchmark_client_args_t*) args;
-#ifdef LIBSYNC
-    if (cl->num_replicas < cl->num_cores) {
-        __thread_init(cl->core, cl->num_cores);
-        if (cl->dummy) {
-            while(true){};
-        }
-    } else {
-        __lowlevel_thread_init(cl->core);
-    }
-#else
-    __lowlevel_thread_init(cl->core);
-#endif
     init_consensus_client_bench(cl->core,
                                 cl->protocol,
                                 cl->protocol_below,
@@ -304,15 +286,6 @@ void* init_benchmark_client(void* args)
     printf("Client on core %d \n", sched_getcpu());
 #endif
 
-/*
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-
-    cpu_set_t *cpuset = CPU_ALLOC(client->current_core+1);
-    CPU_ZERO(cpuset);
-    CPU_SET(client->current_core, cpuset);
-    pthread_attr_setaffinity_np(&attr, sizeof(cpu_set_t), cpuset);
-*/
     pthread_t tid;
     pthread_create(&tid, NULL, measure_thread, client);
 

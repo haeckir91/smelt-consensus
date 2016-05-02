@@ -1,0 +1,9 @@
+*.o
+*.out
+html/*
+latex/*
+cscope.files
+bench/start_bench_smelt
+bench/start_bench
+*.so
+*.a

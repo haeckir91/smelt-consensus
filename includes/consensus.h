@@ -53,9 +53,12 @@
 #define RESULT_PRINTF(file, x...) fprintf(file, x);
 #endif
 
-
+struct smlt_context;
+struct smlt_topology;
+struct smlt_context* ctx;
+struct smlt_topology* topo;
 // should we use libsyncs tree?
-//#define LIBSYNC
+
 
 // Struct given as an argument to start a replica
 // used by pthreads_create

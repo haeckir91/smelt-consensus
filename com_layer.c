@@ -23,6 +23,9 @@
 #include <smlt.h>
 #include <smlt_node.h>
 #include <smlt_message.h>
+#include <smlt_topology.h>
+#include <smlt_generator.h>
+#include <smlt_context.h>
 
 
 #include "consensus.h"
@@ -63,6 +66,9 @@ static __thread cons_args_t thr_args[64];
 static __thread cons_args_t thr_args2[64];
 static void* (*replica_function) (void*);
 static void* (*client_function) (void*);
+
+extern struct smlt_context* ctx;
+extern struct smlt_topology* topo;
 
 /*
  * Startup protocol function
@@ -315,6 +321,28 @@ void consensus_init(
         return;
     }
 
+    struct smlt_generated_model* model = NULL;
+    uint32_t* cores_cpy = malloc(sizeof(uint32_t)*num_cores);
+    
+    for (int i = 0; i < num_cores; i++) {
+        cores_cpy[i] = cores[i];
+    }
+
+    err = smlt_generate_model(cores_cpy, num_cores, "adaptivetree", &model);
+    if (smlt_err_is_fail(err)) {
+        printf("Failed to generated model, aborting\n");
+        return;
+    }
+
+    struct smlt_topology *topo = NULL;
+    smlt_topology_create(model, "adaptivetree", &topo);
+    err = smlt_context_create(topo, &ctx);
+    if (smlt_err_is_fail(err)) {
+        printf("FAILED TO INITIALIZE CONTEXT !\n");
+        return;
+    }
+    
+
     if (algorithm < 7) {
         init_protocol_node(algorithm);
     } else {
@@ -365,9 +393,6 @@ void com_layer_core_send_request(struct smlt_msg* msg)
 
 
 static __thread benchmark_client_args_t args[64];
-#ifdef LIBSYNC
-static __thread benchmark_client_args_t dummy[64];
-#endif
 void consensus_bench_clients_init(uint8_t num_cores,
                                   uint8_t* cores,
                                   uint8_t num_clients,

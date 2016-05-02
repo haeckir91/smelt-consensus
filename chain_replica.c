@@ -15,16 +15,17 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
+#include <smlt.h>
+#include <smlt_message.h>
 
 #include "incremental_stats.h"
 #include "consensus.h"
 #include "chain_replica.h"
 #include "internal_com_layer.h"
 #include "client.h"
-#include "mp.h"
-#include "topo.h"
 
 
 #define CHAIN_COMMIT 4
@@ -65,10 +66,10 @@ typedef struct replica_t{
 static __thread replica_t replica;
 
 static void update_value(void* cmd);
-static void handle_request(uintptr_t* msg);
+static void handle_request(struct smlt_msg* msg);
 
-static void handle_setup(uintptr_t* msg);
-static void handle_commit(uintptr_t* msg);
+static void handle_setup(struct smlt_msg* msg);
+static void handle_commit(struct smlt_msg* msg);
 
 
 #ifdef MEASURE_TP
@@ -85,8 +86,8 @@ static void print_results_chain(replica_t* rep) {
 
     init_stats(&avg);
     char* f_name = (char*) malloc(sizeof(char)*100);
-#ifdef LIBSYNC
-    sprintf(f_name, "results/tp_%s_chain_num_%d_numc_%d", topo_get_name(), 
+#ifdef SMLT
+    sprintf(f_name, "results/tp_%s_chain_num_%d_numc_%d", "adaptivetree", 
             rep->num_replicas, rep->num_clients);
 #else
     sprintf(f_name, "results/tp_chain_below_%d_num_%d_numc_%d", 
@@ -98,7 +99,7 @@ static void print_results_chain(replica_t* rep) {
     RESULT_PRINTF(f, "#####################################################");
     RESULT_PRINTF(f, "#####################\n");
     RESULT_PRINTF(f, "algo_below %d num_clients %d topo %s \n", rep->alg_below, 
-            rep->num_clients, topo_get_name());
+            rep->num_clients, "adaptivetree");
     for (int i = 2; i < 6; i++) {
         RESULT_PRINTF(f, "%10.3f \n", run_res[i]);
         add(&avg, run_res[i]);
@@ -144,9 +145,9 @@ static void* results_chain(void* arg)
 }
 #endif
 
-static void message_handler_chain(uintptr_t* msg) 
+static void message_handler_chain(struct smlt_msg* msg) 
 {
-    switch (get_tag(msg)) {
+    switch (get_tag(msg->data)) {
         case SETUP_TAG:
             handle_setup(msg);
             break;
@@ -157,19 +158,23 @@ static void message_handler_chain(uintptr_t* msg)
             handle_commit(msg);
             break; 
         default:
-            printf("unknown type in queue %lu \n", msg[0]);
+            printf("unknown type in queue %lu \n", msg->data[0]);
     }
 }
 
 void message_handler_loop_chain(void) 
 {
-    uintptr_t* message = (uintptr_t*) malloc(sizeof(uintptr_t)*8);
+    errval_t err;
+    struct smlt_msg* message = smlt_message_alloc(56);
     if (replica.id == 0) {
         int j = 0;
     
         while (true) {
-            if (mp_can_receive(replica.clients[j])) {
-                mp_receive7(replica.clients[j], message);
+            if (smlt_can_recv(replica.clients[j])) {
+                err = smlt_recv(replica.clients[j], message);
+                if (smlt_err_is_fail(err)) {
+                    // TODO
+                }
                 message_handler_chain(message);
             }    
             j++;
@@ -180,8 +185,11 @@ void message_handler_loop_chain(void)
     } else {
        
         while (true) {
-            if (mp_can_receive(replica.replicas[replica.rep_left])) {
-                mp_receive7(replica.replicas[replica.rep_left], message);
+            if (smlt_can_recv(replica.replicas[replica.rep_left])) {
+                err = smlt_recv(replica.replicas[replica.rep_left], message);
+                if (smlt_err_is_fail(err)) {
+                    // TODO
+                }
                 message_handler_chain(message);
             }    
         }
@@ -193,22 +201,25 @@ void message_handler_loop_chain(void)
  * Handler functions for Message Passing
  */
 
-static void handle_setup(uintptr_t* msg)
+static void handle_setup(struct smlt_msg* msg)
 {
-    uintptr_t core = get_client_id(msg);
+    errval_t err;
+    uintptr_t core = get_client_id(msg->data);
     for (int i = 0; i < replica.num_clients; i++) {
         if (replica.clients[i] == core) {
-            msg[4] = i;
+            msg->data[4] = i;
         }
     }
 
-    mp_send7(core,
-             msg[0], msg[1], msg[2], msg[3], msg[4],
-             msg[5], msg[6]);
+    err = smlt_send(core, msg);
+    if (smlt_err_is_fail(err)) {
+        // TODO
+    }
 }
 
-static void handle_request(uintptr_t* msg) 
+static void handle_request(struct smlt_msg* msg) 
 {
+    errval_t err;
 #ifdef MEASURE_TP
     if (!timer_started) {
         total_start = rdtsc();
@@ -217,10 +228,12 @@ static void handle_request(uintptr_t* msg)
     num_reqs++;
 #endif
     if (replica.id == 0) {
-        set_tag(msg, CHAIN_COMMIT);
+        set_tag(msg->data, CHAIN_COMMIT);
         // send to next
-        mp_send7(replica.replicas[1], msg[0], msg[1], msg[2], msg[3],
-                     msg[4], msg[5], msg[6]);
+        err = smlt_send(replica.replicas[1], msg);
+        if (smlt_err_is_fail(err)) {
+            // TODO
+        }
 
         if (replica.level == NODE_LEVEL) {
 
@@ -229,33 +242,40 @@ static void handle_request(uintptr_t* msg)
                 com_layer_core_send_request(msg);
             }
    
-            update_value(&msg[4]);
+            update_value(&msg->data[4]);
         } else {
-            update_value(&msg[4]);
-            mp_send7(replica.started_from, msg[0], msg[1], 
-                    msg[2], msg[3], msg[4], msg[5], msg[6]);
+            update_value(&msg->data[4]);
+            smlt_send(replica.started_from, msg);
+            if (smlt_err_is_fail(err)) {
+                // TODO
+            }
         }
     } else {
         printf("Only leader should receive requests \n");
     }
 }
 
-static void handle_commit(uintptr_t* msg) 
+static void handle_commit(struct smlt_msg* msg) 
 {
+    errval_t err;
     if (replica.id != 0) {
         if (!replica.is_tail) {
-            mp_send7(replica.replicas[replica.rep_right], msg[0], msg[1],
-                     msg[2], msg[3], msg[4], msg[5], msg[6]);
+            err = smlt_send(replica.replicas[replica.rep_right], msg);
+            if (smlt_err_is_fail(err)){
+                // TODO
+            }
         } else {
-            set_tag(msg, RESP_TAG);
-            mp_send7(replica.clients[get_client_id(msg)], msg[0], msg[1],
-                     msg[2], msg[3], msg[4], msg[5], msg[6]);
+            set_tag(msg->data, RESP_TAG);
+            err = smlt_send(replica.clients[get_client_id(msg->data)], msg);
+            if (smlt_err_is_fail(err)) {
+                // TODO
+            }
         }
         // execute request
         if (replica.alg_below != ALG_NONE) {
             com_layer_core_send_request(msg);
         }
-        update_value(&msg[4]);
+        update_value(&msg->data[4]);
     } else {
         printf("Replica %d: leader should not receive commit\n", replica.id);
         return;
@@ -324,23 +344,10 @@ void init_replica_chain(uint8_t id,
     
     // connect to replicas
     if (id == 0) {
-        mp_connect(current_core, replica.replicas[replica.rep_right]);
-
-        if (replica.level == CORE_LEVEL) {
-            mp_connect(current_core, replica.started_from);
-        }
 #ifdef MEASURE_TP
         pthread_t tid;
         pthread_create(&tid, NULL, results_chain, &replica);
 #endif
-    } else {
-        if (!replica.is_tail) {
-            mp_connect(current_core, replica.replicas[replica.rep_right]);
-        } else {
-            for (int i = 0; i < num_clients; i++) {
-                mp_connect(current_core, clients[i]);
-            }
-        }
     }
 }
 

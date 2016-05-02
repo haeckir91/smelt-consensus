@@ -11,9 +11,11 @@
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
-
+#include <smlt.h>
+#include <smlt_message.h>
 
 #include <sys/time.h>
+#include <stdlib.h>
 
 #include "incremental_stats.h"
 #include "client.h"
@@ -21,8 +23,6 @@
 #include "consensus.h"
 #include "raft_replica.h"
 #include "flags.h"
-#include "mp.h"
-#include "sync.h"
 
 #define RAFT_APP 3
 #define RAFT_APPR 4
@@ -108,15 +108,16 @@ typedef struct raft_replica_t{
 } raft_replica_t;
 
 
+static __thread struct smlt_msg* buf;
 static __thread raft_replica_t replica;
 
-static void handle_setup(uintptr_t* msg);
-static void handle_request(uintptr_t* msg);
-static void handle_append(uintptr_t* msg);
-static void handle_empty_append(uintptr_t* msg);
-static void handle_append_response(uintptr_t* msg);
-static void handle_vote(uintptr_t* msg);
-static void handle_vote_response(uintptr_t* msg);
+static void handle_setup(struct smlt_msg* msg);
+static void handle_request(struct smlt_msg* msg);
+static void handle_append(struct smlt_msg* msg);
+static void handle_empty_append(struct smlt_msg* msg);
+static void handle_append_response(struct smlt_msg* msg);
+static void handle_vote(struct smlt_msg* msg);
+static void handle_vote_response(struct smlt_msg* msg);
 
 static void cleanup_queue(struct log_queue* queue);
 
@@ -258,23 +259,25 @@ static struct log_entry* queue_contains(struct log_queue *queue,
 }
 
 
-static void handle_setup(uintptr_t* msg)
+static void handle_setup(struct smlt_msg* msg)
 {
-    uintptr_t core = get_client_id(msg);
+    errval_t err;
+    uintptr_t core = get_client_id(msg->data);
     for (int i = 0; i < replica.num_clients; i++) {
         if (replica.clients[i] == core) {
-            msg[4] = i;
+            msg->data[4] = i;
         }
     }
 
-    mp_send7(core,
-             msg[0], msg[1], msg[2], msg[3], msg[4],
-             msg[5], msg[6]);
+    err = smlt_send(core, msg);
+    if (smlt_err_is_fail(err)) {
+        // TODO
+    }
 }
 
-static void message_handler_raft(uintptr_t *msg) 
+static void message_handler_raft(struct smlt_msg *msg) 
 {
-    switch (get_tag(msg)) {
+    switch (get_tag(msg->data)) {
         case SETUP_TAG: 
             handle_setup(msg);
             break;
@@ -304,13 +307,14 @@ static void message_handler_raft(uintptr_t *msg)
 	        break; 
 	    default:
 		    printf("Replica %d: unknown type in queue %" PRIu16" \n", 
-                    replica.current_core, get_tag(msg));
+                    replica.current_core, get_tag(msg->data));
 	}
 }
 
 void message_handler_loop_raft(void)
 {
-    uintptr_t* message = (uintptr_t*) malloc(sizeof(uintptr_t)*8);
+    errval_t err;
+    struct smlt_msg* message = smlt_message_alloc(56);
     if (replica.id == replica.current_leader) {
         int j = 0;
         uint8_t* all_cores = (uint8_t*) malloc(sizeof(uint8_t)* (replica.num_replicas +
@@ -325,8 +329,11 @@ void message_handler_loop_raft(void)
         }
 
         while (true) {
-            if (mp_can_receive(all_cores[j])) {
-                mp_receive7(all_cores[j], message);
+            if (smlt_can_recv(all_cores[j])) {
+                err = smlt_recv(all_cores[j], message);
+                if (smlt_err_is_fail(err)) {
+                    // TODO
+                }
                 message_handler_raft(message);
             }
             j++;
@@ -335,8 +342,11 @@ void message_handler_loop_raft(void)
         }
     }else {
         while (true) {
-            if (mp_can_receive(replica.replicas[replica.current_leader])) {
-                mp_receive7(replica.replicas[replica.current_leader], message);
+            if (smlt_can_recv(replica.replicas[replica.current_leader])) {
+                err = smlt_recv(replica.replicas[replica.current_leader], message);
+                if (smlt_err_is_fail(err)) {
+                    // TODO
+                }
                 message_handler_raft(message);
             }
         }
@@ -365,8 +375,10 @@ static void update_state(uint64_t term, uint16_t leader_id)
 }
 
 
-static void update_applied_entries(void) {
+static void update_applied_entries(void) 
+{
 
+    errval_t err;
     while (replica.commit_index > replica.last_applied) {
 	    // apply entry one at the time
 	    replica.last_applied++;
@@ -380,8 +392,11 @@ static void update_applied_entries(void) {
 	    // respond to client if I am the leader
 	    if (replica.id == replica.current_leader) {
   	        // find client which sent this request
-            mp_send7(replica.clients[get_client_id(&(ele->header))],
-                     0,0,0,0,0,0,0);
+            err = smlt_send(replica.clients[get_client_id(&(ele->header))],
+                            buf);
+            if (smlt_err_is_fail(err)) {
+                // TODO
+            }
             ele->exec_count++;
             cleanup_queue(&replica.queue);
 #ifdef MEASURE_TP
@@ -455,106 +470,113 @@ static void cleanup_queue(struct log_queue* queue)
 /*
  * Handler Methods
  */
-static __thread uintptr_t buf[8];
-static void handle_request(uintptr_t* msg) 
+static void handle_request(struct smlt_msg* msg) 
 {
+    errval_t err;
     if (replica.id == replica.current_leader) {
-       replica.last_log_index++;
-       struct log_entry* ele = (struct log_entry*) malloc(sizeof(struct log_entry));
-       ele->payload[0] = msg[4];
-       ele->payload[1] = msg[5];
-       ele->payload[2] = msg[6];
-       ele->header = msg[0];
-       ele->index = replica.last_log_index;
-       ele->term = replica.current_term;       
-       ele->exec_count = 0;
+        replica.last_log_index++;
+        struct log_entry* ele = (struct log_entry*) malloc(sizeof(struct log_entry));
+        ele->payload[0] = msg->data[4];
+        ele->payload[1] = msg->data[5];
+        ele->payload[2] = msg->data[6];
+        ele->header = msg->data[0];
+        ele->index = replica.last_log_index;
+        ele->term = replica.current_term;       
+        ele->exec_count = 0;
 
-       enqueue(&replica.queue, ele);
+        enqueue(&replica.queue, ele);
 
-       set_tag(&msg[0], RAFT_APP);
-       for (int i = 0; i < replica.num_replicas; i++) {
-           // combine current term and current leader
-           if (i == replica.current_leader) {
+        set_tag(&msg->data[0], RAFT_APP);
+        for (int i = 0; i < replica.num_replicas; i++) {
+            // combine current term and current leader
+            if (i == replica.current_leader) {
               continue;
-           }
-           set_request_id(&msg[1], replica.current_term);
-           set_tag(&msg[1], replica.current_leader);
-           mp_send7(replica.replicas[i],
-                    msg[0],
-                    msg[1], 
-                    replica.last_log_index-1,
-                    replica.commit_index,
-                    msg[4],
-                    msg[5],
-                    msg[6]);
-       }
+            }
+            set_request_id(&msg->data[1], replica.current_term);
+            set_tag(&msg->data[1], replica.current_leader);
+            msg->data[2] = replica.last_log_index-1;
+            msg->data[3] = replica.commit_index;
 
-       for (int i = 0; i < replica.num_replicas; i++) {
-           // combine current term and current leader
-           if (i == replica.current_leader) {
-              continue;
-           }
-           mp_receive7(replica.replicas[i],buf);
-           message_handler_raft(buf);
+            err = smlt_send(replica.replicas[i], msg);
+            if (smlt_err_is_fail(err)) {
+                // TODO
+            }
+        }
+        for (int i = 0; i < replica.num_replicas; i++) {
+            // combine current term and current leader
+            if (i == replica.current_leader) {
+               continue;
+            }
+            err = smlt_recv(replica.replicas[i],buf);
+            if (smlt_err_is_fail(err)) {
+                // TODO
+            }
+            message_handler_raft(buf);
        }
 
        replica.previous_term = replica.current_term;
     } else {
         // forward
-        mp_send7(replica.replicas[replica.current_leader], 
-                 msg[0], msg[1], msg[2], msg[3],
-                 msg[4], msg[5], msg[6]);
+        err = smlt_send(replica.replicas[replica.current_leader], msg);
+        if (smlt_err_is_fail(err)) {
+            // TODO
+        }
     }
 }
 
-static void handle_empty_append(uintptr_t* msg)
+static void handle_empty_append(struct smlt_msg* msg)
 {
-    if (msg[1] >= replica.commit_index) {
-	    replica.commit_index = MIN(msg[1], replica.last_log_index);
+    if (msg->data[1] >= replica.commit_index) {
+	    replica.commit_index = MIN(msg->data[1], replica.last_log_index);
      	update_applied_entries();
     }
     replica.election_timeout = false;
 }
 
 
-static void handle_append(uintptr_t* msg) 
+static void handle_append(struct smlt_msg* msg) 
 {
+    errval_t err;
     // reset timer
     //printf("Repica %d: handle append \n", replica.id);
     replica.election_timeout = false;	
-    uint32_t term = get_request_id(&msg[1]);
-    uint8_t leader = get_tag(&msg[1]);
-    uintptr_t prev_index = msg[2];
-    uintptr_t commit_index = msg[3];
+    uint32_t term = get_request_id(&msg->data[1]);
+    uint8_t leader = get_tag(&msg->data[1]);
+    uintptr_t prev_index = msg->data[2];
+    uintptr_t commit_index = msg->data[3];
     // see if leader is same leader 
     update_state(term, leader);
 	
     if ((replica.id != leader)) {
 
-        set_tag(&msg[0], RAFT_APPR);
+        set_tag(&msg->data[0], RAFT_APPR);
 	    // term < currentTerm
 	    if ((term < replica.current_term)) {
             // failed !
-            mp_send7(replica.replicas[leader],
-                     msg[0],
-                     replica.current_term,
-                     prev_index,
-                     replica.id,
-                     false,
-                     0, 0);
+            msg->data[1] = replica.current_term;
+            msg->data[2] = prev_index;
+            msg->data[3] = replica.id;
+            msg->data[4] = false;
+ 
+            err = smlt_send(replica.replicas[leader],msg);
+            if (smlt_err_is_fail(err)) {
+                // TODO
+            }
 	        return;
 	    }
 	
 	    // log doesn't contain entry at prev_log_index whose term matches prev_log_term
         //print_queue_state(&replica.queue);
 	    if (!queue_contains(&replica.queue, prev_index)) {
-            mp_send7(replica.replicas[leader],
-                     msg[0],
-                     replica.current_term,
-                     prev_index,
-                     replica.id,
-                     false,
-                     0,0);
+            msg->data[1] = replica.current_term;
+            msg->data[2] = prev_index;
+            msg->data[3] = replica.id;
+            msg->data[4] = false;
+ 
+            err = smlt_send(replica.replicas[leader],msg);
+            if (smlt_err_is_fail(err)) {
+                // TODO
+            }
 	        return;
 	    }   
 
@@ -571,23 +593,26 @@ static void handle_append(uintptr_t* msg)
         struct log_entry* ele = (struct log_entry*) malloc(sizeof(struct log_entry));
         ele->index = prev_index+1;
         ele->term = term;
-        ele->header = msg[0];
-        ele->payload[0] = msg[4];        
-        ele->payload[1] = msg[5];        
-        ele->payload[2] = msg[6];        
+        ele->header = msg->data[0];
+        ele->payload[0] = msg->data[4];        
+        ele->payload[1] = msg->data[5];        
+        ele->payload[2] = msg->data[6];        
         replica.last_log_index = prev_index+1;
 
         enqueue(&replica.queue, ele);
 	    if (commit_index > replica.commit_index) {
 	        replica.commit_index = MIN(commit_index, replica.last_log_index);
 	    }
-        mp_send7(replica.replicas[replica.current_leader],
-                 msg[0],
-                 replica.current_term,  
-                 prev_index+1,
-                 replica.id,
-                 true,
-                 0, 0);
+
+        msg->data[1] = replica.current_term;
+        msg->data[2] = prev_index+1;
+        msg->data[3] = replica.id;
+        msg->data[4] = true;
+
+        err = smlt_send(replica.replicas[leader],msg);
+        if (smlt_err_is_fail(err)) {
+            // TODO
+        }
     } else { // forward to leader
 	    printf("Replica %d: Leader should not receive appendEntry requests \n", replica.id);
     }
@@ -596,11 +621,11 @@ static void handle_append(uintptr_t* msg)
 }
 
 
-static void handle_vote(uintptr_t* msg){
+static void handle_vote(struct smlt_msg* msg){
 
 }
 
-static void handle_vote_response(uintptr_t* msg){
+static void handle_vote_response(struct smlt_msg* msg){
 
 }
 /*
@@ -762,13 +787,14 @@ static void handle_requestVote_reply(struct raft_binding *b,
 }
 */
 
-static void handle_append_response(uintptr_t* msg)
+static void handle_append_response(struct smlt_msg* msg)
 {
+    errval_t err;
     //printf("Repica %d: handle append response \n", replica.id);
-    uint32_t term = (uint32_t) msg[1];
-    uint64_t last_index = msg[2];
-    uint8_t replica_id = (uint8_t) msg[3];
-    bool success = (bool) msg[4];
+    uint32_t term = (uint32_t) msg->data[1];
+    uint64_t last_index = msg->data[2];
+    uint8_t replica_id = (uint8_t) msg->data[3];
+    bool success = (bool) msg->data[4];
     struct log_entry* ele = NULL;
 
     update_state(term, replica.current_leader);
@@ -791,18 +817,23 @@ static void handle_append_response(uintptr_t* msg)
             printf("Log index %" PRIu64 " next_index %" PRIu64 "\n", 
                     replica.last_log_index,
                     replica.next_index[replica_id]);
-            set_tag(&msg[0], RAFT_APP);
-            set_request_id(&msg[1], replica.current_term);
-            set_tag(&msg[1], replica.id);
+            set_tag(&msg->data[0], RAFT_APP);
+            set_request_id(&msg->data[1], replica.current_term);
+            set_tag(&msg->data[1], replica.id);
 
             ele = ele->next;
             assert(ele != NULL);
-            mp_send7(replica.replicas[replica_id],
-                    msg[0], msg[1], last_index,
-                    replica.commit_index,
-                    ele->payload[0],
-                    ele->payload[1],
-                    ele->payload[2]);
+            
+            msg->data[2] = last_index;
+            msg->data[3] = replica.commit_index;
+            msg->data[4] = ele->payload[0];
+            msg->data[5] = ele->payload[1];
+            msg->data[6] = ele->payload[2];
+          
+            err = smlt_send(replica.replicas[replica_id], msg);
+            if (smlt_err_is_fail(err)) {
+                // TODO
+            }
 	    }  
     } else { // send previous
     //    printf("term %d last_index %" PRIu64 " replica_id %d success %d \n",
@@ -816,13 +847,16 @@ static void handle_append_response(uintptr_t* msg)
 
         assert(ele != NULL);
         ele = ele->prev;
-
-        mp_send7(replica.replicas[replica_id],
-                 msg[0], msg[1], last_index-1,
-                 replica.commit_index,
-                 ele->payload[0],
-                 ele->payload[1],
-                 ele->payload[2]);
+        msg->data[2] = last_index-1;
+        msg->data[3] = replica.commit_index;
+        msg->data[4] = ele->payload[0];
+        msg->data[5] = ele->payload[1];
+        msg->data[6] = ele->payload[2];
+      
+        err = smlt_send(replica.replicas[replica_id], msg);
+        if (smlt_err_is_fail(err)) {
+            // TODO
+        }
 
     }
 
@@ -930,6 +964,7 @@ void init_replica_raft(uint8_t id,
 	replica.voted_for = -1;
 	replica.backoff = (rdtsc() % BACKOFF_MAX);
 
+    buf = smlt_message_alloc(56);
 	for (int i = 0; i < num_replicas; i++) {
 	    replica.next_index[i] = 2;
 	    replica.match_index[i] = 0;
@@ -961,14 +996,6 @@ void init_replica_raft(uint8_t id,
 	   replica.is_follower = true;
 	   replica.is_candidate = false;
 	}
-
-#ifndef LIBSYNC
-    if (replica.id == 0) {
-        for (int i = 1; i < replica.num_replicas; i++) {
-            mp_connect(current_core, replicas[i]);
-        }
-    }
-#endif
 
 #ifdef MEASURE_TP
     if ((id == 0) && (level == NODE_LEVEL)) {

@@ -16,7 +16,11 @@
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
-
+#include <smlt.h>
+#include <smlt_broadcast.h>
+#include <smlt_context.h>
+#include <smlt_message.h>
+#include <smlt_topology.h>
 
 #include <sys/time.h>
 
@@ -27,9 +31,6 @@
 #include "one_replica.h"
 #include "client.h"
 #include "flags.h"
-#include "mp.h"
-#include "topo.h"
-#include "sync.h"
 
 #define MAX_BACKOFF 150
 #define LEADER_TIMEOUT 350
@@ -61,7 +62,7 @@
  */
 
 struct entry{
-    uintptr_t* msg;
+    struct smlt_msg* msg;
 	struct entry* next;
 };
 
@@ -124,6 +125,8 @@ typedef struct onepaxos_replica_t{
 } onepaxos_replica_t;
 
 static __thread onepaxos_replica_t replica;
+extern struct smlt_context* ctx;
+extern struct smlt_topology* topo;
 
 #ifdef VERIFY
 uint32_t* crcs;
@@ -137,21 +140,21 @@ static uint64_t tsc_per_ms;
 
 
 // prototypes
-static void handle_setup(uintptr_t* msg);
-static void handle_request(uintptr_t* msg);
-static void handle_prepare(uintptr_t* msg);
-static void handle_prepare_response(uintptr_t* msg);
-static void handle_accept(uintptr_t* msg);
-static void handle_learn(uintptr_t* msg);
-static void handle_abandon(uintptr_t* msg);
-static void handle_is_current_leader(uintptr_t* msg);
-static void handle_is_current_leader_response(uintptr_t* msg);
-static void handle_get_current_acceptor(uintptr_t* msg);
-static void handle_get_current_acceptor_response(uintptr_t* msg);
-static void handle_is_alive(uintptr_t* msg);
-static void handle_is_alive_response(uintptr_t* msg);
-static void handle_change_leader(uintptr_t* msg);
-static void handle_change_acceptor(uintptr_t* msg);
+static void handle_setup(struct smlt_msg* msg);
+static void handle_request(struct smlt_msg* msg);
+static void handle_prepare(struct smlt_msg* msg);
+static void handle_prepare_response(struct smlt_msg* msg);
+static void handle_accept(struct smlt_msg* msg);
+static void handle_learn(struct smlt_msg* msg);
+static void handle_abandon(struct smlt_msg* msg);
+static void handle_is_current_leader(struct smlt_msg* msg);
+static void handle_is_current_leader_response(struct smlt_msg* msg);
+static void handle_get_current_acceptor(struct smlt_msg* msg);
+static void handle_get_current_acceptor_response(struct smlt_msg* msg);
+static void handle_is_alive(struct smlt_msg* msg);
+static void handle_is_alive_response(struct smlt_msg* msg);
+static void handle_change_leader(struct smlt_msg* msg);
+static void handle_change_acceptor(struct smlt_msg* msg);
 
 static bool execute(uintptr_t* msg);
 static uint16_t next_acceptor_id(void);
@@ -172,8 +175,8 @@ static void print_results_one(onepaxos_replica_t* rep) {
 
     init_stats(&avg);
     char* f_name = (char*) malloc(sizeof(char)*100);
-#ifdef LIBSYNC
-    sprintf(f_name, "results/tp_%s_one_num_%d_numc_%d", topo_get_name(),
+#ifdef SMLT
+    sprintf(f_name, "results/tp_%s_one_num_%d_numc_%d", "adaptivetree",
             rep->num_replicas, rep->num_clients);
 #else
     sprintf(f_name, "results/tp_one_below_%d_num_%d_numc_%d",
@@ -185,7 +188,7 @@ static void print_results_one(onepaxos_replica_t* rep) {
     RESULT_PRINTF(f, "#####################################################");
     RESULT_PRINTF(f, "#####################\n");
     RESULT_PRINTF(f, "algo_below %d num_clients %d topo %s \n", rep->alg_below,
-            rep->num_clients, topo_get_name());
+            rep->num_clients, "adaptivetree");
     for (int i = 2; i < 6; i++) {
         RESULT_PRINTF(f, "%10.3f \n", run_res[i]);
         add(&avg, run_res[i]);
@@ -233,9 +236,9 @@ static void* results_one(void* arg)
 /*
  * Message handler
  */
-static void message_handler_onepaxos(uintptr_t *msg)
+static void message_handler_onepaxos(struct smlt_msg *msg)
 {
-	switch (get_tag(msg)) {
+	switch (get_tag(msg->data)) {
 	    case SETUP_TAG:
             handle_setup(msg);
             break;
@@ -274,7 +277,7 @@ static void message_handler_onepaxos(uintptr_t *msg)
 	        break;
 
 	    case ONE_IS_LEADER:
-            if (msg[1] == 0) {
+            if (msg->data[1] == 0) {
                 handle_is_current_leader(msg);
             } else {
                 handle_is_current_leader_response(msg);
@@ -282,7 +285,7 @@ static void message_handler_onepaxos(uintptr_t *msg)
 	        break;
 
 	    case ONE_GET_ACCEPTOR:
-            if (msg[1] == 0) {
+            if (msg->data[1] == 0) {
                 handle_get_current_acceptor(msg);
             } else {
                 handle_get_current_acceptor_response(msg);
@@ -290,7 +293,7 @@ static void message_handler_onepaxos(uintptr_t *msg)
 	        break;
 
 	    case ONE_IS_ALIVE:
-            if (msg[1] == 0) {
+            if (msg->data[1] == 0) {
                 handle_is_alive(msg);
             } else {
                 handle_is_alive_response(msg);
@@ -303,16 +306,17 @@ static void message_handler_onepaxos(uintptr_t *msg)
 #endif
 	    default:
 		    printf("Replica %d: unknown message type %" PRIu16 " \n", 
-                    replica.current_core, get_tag(msg));
+                    replica.current_core, get_tag(msg->data));
 	}
 }
 
 
-#ifdef LIBSYNC
+#ifdef SMLT
 __thread uintptr_t msg2[7];
 void message_handler_loop_onepaxos(void)
 {
-    uintptr_t* message = (uintptr_t*) malloc(sizeof(uintptr_t)*8);
+    errval_t err;
+    struct smlt_msg* message = smlt_message_alloc(56);
     if (replica.id == replica.current_leader) {
         uint64_t* cores = (uint64_t*) malloc(sizeof(uint64_t)*
                                              replica.num_clients*2);
@@ -320,24 +324,23 @@ void message_handler_loop_onepaxos(void)
             cores[i] = replica.clients[i];
         }
 
-        int parent;
-        mp_get_parent(replica.current_core, &parent);
+        struct smlt_topology_node* parent;
+        struct smlt_topology_node* node;
+        node = smlt_topology_node_get_by_id(topo, replica.current_core);
+        parent = smlt_topology_node_get_parent(node);
         for (int i = replica.num_clients; i < replica.num_clients*2; i++) {
-            cores[replica.num_clients] = parent;
+            cores[replica.num_clients] = smlt_topology_node_get_id(node);
         }
 
         int num_cores = 2*replica.num_clients;
         while (true) {
-            // non hybrid verions
             for (int i = 0; i < num_cores; i++) {
-                if (mp_can_receive(cores[i])) {
-                    mp_receive7(cores[i], message);
-                    if (cores[i] != (uint64_t) parent) {
+                if (smlt_can_recv(cores[i])) {
+                    err = smlt_recv(cores[i], message);
+                    if (cores[i] != (uint64_t) smlt_topology_node_get_id(node)) {
                         message_handler_onepaxos(message);
                     } else {
-                        mp_send_ab7(message[0], message[1], message[2],
-                                    message[3], message[4], message[5],
-                                    message[6]);
+                        smlt_broadcast(ctx, message);
                         message_handler_onepaxos(message);
                     }
                 }
@@ -345,21 +348,19 @@ void message_handler_loop_onepaxos(void)
         }
     } else if (replica.id == replica.current_acceptor) {
         while (true) {
-            if (mp_can_receive(replica.replicas[replica.current_leader])) {
-                mp_receive7(replica.replicas[replica.current_leader], message);
+            if (smlt_can_recv(replica.replicas[replica.current_leader])) {
+                smlt_recv(replica.replicas[replica.current_leader], message);
                 message_handler_onepaxos(message);
             }
         }
 
     } else {
         while (true) {
-            mp_receive_forward7(message);
+            smlt_broadcast(ctx, message)
             message_handler_onepaxos(message);
-            if (message[3] == replica.current_core) {
-                set_tag(message, RESP_TAG);
-                mp_send7(replica.clients[get_client_id(message)],
-                         message[0], message[1], message[2], message[3],
-                         message[4], message[5], message[6]);
+            if (message->data[3] == replica.current_core) {
+                set_tag(message->data, RESP_TAG);
+                smlt_send(replica.clients[get_client_id(message->data)], message);
             }
         }
     }
@@ -367,7 +368,8 @@ void message_handler_loop_onepaxos(void)
 #else
 void message_handler_loop_onepaxos(void)
 {
-    uintptr_t* message = (uintptr_t*) malloc(sizeof(uintptr_t)*8);
+    errval_t err;
+    struct smlt_msg* message = smlt_message_alloc(56);
     if (replica.id == replica.current_leader) {
         int j = 0;
         uint8_t* all_cores = (uint8_t*) malloc(sizeof(uint8_t)* (replica.num_replicas +
@@ -381,8 +383,11 @@ void message_handler_loop_onepaxos(void)
         }
 
         while (true) {
-            if (mp_can_receive(all_cores[j])) {
-                mp_receive7(all_cores[j], message);
+            if (smlt_can_recv(all_cores[j])) {
+                err = smlt_recv(all_cores[j], message);
+                if (smlt_err_is_fail(err)) {
+                    // TODO
+                }
                 message_handler_onepaxos(message);
             }
             j++;
@@ -392,8 +397,11 @@ void message_handler_loop_onepaxos(void)
 
     } else if (replica.id == replica.current_acceptor) {
         while (true) {
-            if (mp_can_receive(replica.replicas[replica.current_leader])) {
-                mp_receive7(replica.replicas[replica.current_leader], message);
+            if (smlt_can_recv(replica.replicas[replica.current_leader])) {
+                err = smlt_recv(replica.replicas[replica.current_leader], message);
+                if (smlt_err_is_fail(err)) {
+                    // TODO
+                }
                 message_handler_onepaxos(message);
             }
         }
@@ -401,16 +409,21 @@ void message_handler_loop_onepaxos(void)
     }else {
 
         while (true) {
-            if (mp_can_receive(replica.replicas[replica.current_acceptor])) {
-                mp_receive7(replica.replicas[replica.current_acceptor], message);
+            if (smlt_can_recv(replica.replicas[replica.current_acceptor])) {
+                smlt_recv(replica.replicas[replica.current_acceptor], message);
+                if (smlt_err_is_fail(err)) {
+                    // TODO
+                }
                 message_handler_onepaxos(message);
 
 #ifdef KVS
-                if (message[3] == replica.current_core) {
-                    set_tag(message, RESP_TAG);
-                    mp_send7(replica.clients[get_client_id(message)],
-                             message[0], message[1], message[2], message[3],
-                             message[4], message[5], message[6]);
+                if (message->data[3] == replica.current_core) {
+                    set_tag(message->data, RESP_TAG);
+                    err = smlt_send(replica.clients[get_client_id(message->data)], 
+                                    message);
+                    if (smlt_err_is_fail(err)) {
+                        // TODO
+                    }
                 }
 #endif
             }
@@ -539,22 +552,25 @@ static void handle_verify(uintptr_t* msg)
 }
 #endif
 
-static void handle_setup(uintptr_t* msg)
+static void handle_setup(struct smlt_msg* msg)
 {
-    uintptr_t core = get_client_id(msg);
+    errval_t err;
+    uintptr_t core = get_client_id(msg->data);
     for (int i = 0; i < replica.num_clients; i++) {
         if (replica.clients[i] == core) {
-            msg[4] = i;
+            msg->data[4] = i;
         }
     }
 
-    mp_send7(core,
-             msg[0], msg[1], msg[2], msg[3], msg[4],
-             msg[5], msg[6]);
+    err = smlt_send(core, msg);
+    if (smlt_err_is_fail(err)) {
+        // TODO
+    }   
 }
 
-static void handle_request(uintptr_t* msg)
+static void handle_request(struct smlt_msg* msg)
 {
+    errval_t err;
 #ifdef LEADER_FAIL_1
     if ((replica.proposal_index == (replica.num_requests/2))
 	     && replica.id == 0) {
@@ -565,45 +581,51 @@ static void handle_request(uintptr_t* msg)
 
 #ifdef MEASURE_TP
     if (!timer_started){
-       total_start = rdtsc();
-       timer_started = true;
+        total_start = rdtsc();
+        timer_started = true;
     }
 #endif
     if (replica.id == replica.current_leader){
-       struct entry* ele = (struct entry*) malloc(sizeof(struct entry));
-       ele->msg = msg;
-       entry_q_enqueue(ele);
-       set_tag(msg, ONE_ACC);
-       mp_send7(replica.replicas[replica.current_acceptor], msg[0], msg[1],
-                msg[2], msg[3], msg[4], msg[5], msg[6]);
+        struct entry* ele = (struct entry*) malloc(sizeof(struct entry));
+        ele->msg = msg;
+        entry_q_enqueue(ele);
+        set_tag(msg->data, ONE_ACC);
+        err = smlt_send(replica.replicas[replica.current_acceptor], msg);
+        if (smlt_err_is_fail(err)) {
+            // TODO
+        }
 
-       replica.proposal_index++;
+        replica.proposal_index++;
 
     } else {
         printf("Core %d: Forward to %d \n", replica.current_core,
                replica.replicas[replica.current_leader]);
-        mp_connect(replica.current_core, replica.replicas[replica.current_leader]);
-        mp_send7(replica.replicas[replica.current_leader],
-                 msg[0], msg[1], msg[2], msg[3], msg[4], msg[5], msg[6]);
+        err = smlt_send(replica.replicas[replica.current_leader], msg);
+        if (smlt_err_is_fail(err)) {
+            // TODO
+        }
     }
 }
 
-static void handle_prepare(uintptr_t* msg)
+static void handle_prepare(struct smlt_msg* msg)
 {
-    if (replica.highest_proposal_number < msg[2]) {
-    	replica.highest_proposal_number = msg[2];
+    errval_t err;
+    if (replica.highest_proposal_number < msg->data[2]) {
+    	replica.highest_proposal_number = msg->data[2];
     	// send to leader that I'm alive to reset timer
         // TODO SEND prepare response
-        set_tag(msg, ONE_PREP_RESP);
-        mp_send7(replica.current_leader, msg[0], msg[1], msg[2], msg[3], msg[4],
-                msg[5], msg[6]);
-
+        set_tag(msg->data, ONE_PREP_RESP);
+        err = smlt_send(replica.current_leader, msg);
+        if (smlt_err_is_fail(err)) {
+            // TODO
+        }
 
         // TODO SEND alive to leader
-        set_tag(msg, ONE_IS_ALIVE);
-        mp_send7(replica.current_leader, msg[0], msg[1], msg[2], msg[3], msg[4],
-                msg[5], msg[6]);
-
+        set_tag(msg->data, ONE_IS_ALIVE);
+        err = smlt_send(replica.current_leader, msg);
+        if (smlt_err_is_fail(err)) {
+            // TODO
+        }
 
     } else {
 
@@ -611,11 +633,12 @@ static void handle_prepare(uintptr_t* msg)
 
 }
 
-
-static void handle_prepare_response(uintptr_t* msg)
+static void handle_prepare_response(struct smlt_msg* msg)
 {
+    errval_t err;
 #ifdef DEBUG_FAIL
-    printf("Replica %d: received prepare response %"PRIu64" index \n", replica.id, msg[1]);
+    printf("Replica %d: received prepare response %"PRIu64" index \n", 
+           replica.id, msg->data[1]);
 #endif
     // resend difference between proposals and index -> got some client requests before
     // acceptor died
@@ -643,10 +666,11 @@ static void handle_prepare_response(uintptr_t* msg)
     if (!proposals_was_null) {
         while (!entry_q_empty(&replica.entry_queue)) {
             struct entry* ele = entry_q_dequeue();
-            // TODO SEND ACCEPT
-            set_tag(ele->msg, ONE_ACC);
-            mp_send7(replica.current_leader, msg[0], msg[1], msg[2], msg[3], msg[4],
-                     msg[5], msg[6]);
+            set_tag(ele->msg->data, ONE_ACC);
+            err = smlt_send(replica.current_leader, msg);
+            if (smlt_err_is_fail(err)) {
+                // TODO
+            }
             free(ele);
         }
     }
@@ -657,49 +681,53 @@ static void handle_prepare_response(uintptr_t* msg)
     }
 }
 
-static void handle_accept(uintptr_t* msg)
+static void handle_accept(struct smlt_msg* msg)
 {
-
+    errval_t err;
 #ifdef ACCEPTOR_FAIL_1
-    if ((replica.id == 1) && (msg[1] == (replica.num_requests/2))) {
+    if ((replica.id == 1) && (msg->data[1] == (replica.num_requests/2))) {
         printf("Replica %d: Acceptor failing \n", replica.id);
         while(true);
     }
 #endif
 
-    if (msg[2] >= replica.highest_proposal_number){
+    if (msg->data[2] >= replica.highest_proposal_number){
 	    // for the acceptor the value is already chosen
 	    replica.last_entry.msg = msg;
 #ifdef VERIFY
-	    rid[index] = get_request_id(msg);
-	    cid[index] = get_client_id(msg);
+	    rid[index] = get_request_id(msg->data);
+	    cid[index] = get_client_id(msg->data);
 #endif
 
         // broadcast learn
-        set_tag(msg, ONE_LEARN);
-        msg[1] = replica.index;
-#ifdef LIBSYNC
-        mp_send_ab7(msg[0], msg[1], msg[2], msg[3], msg[4],
-                    msg[5], msg[6]);
+        set_tag(msg->data, ONE_LEARN);
+        msg->data[1] = replica.index;
+#ifdef SMLT
+        err = smlt_broadcast(ctx, msg);
+        if (smlt_err_is_fail(err)) {
+            // TODO
+        }
 #else
         for (int i = 0; i < replica.num_replicas; i++) {
             if (i == 1) {
                 continue;
             }
 
-            mp_send7(replica.replicas[i], msg[0], msg[1], msg[2], msg[3],
-                     msg[4], msg[5], msg[6]);
+            err = smlt_send(replica.replicas[i], msg);
+            if (smlt_err_is_fail(err)) {
+                // TODO
+            }
         }
 #endif
-	    execute(msg);
+	    execute(msg->data);
 
         if (replica.alg_below != ALG_NONE) {
 	        com_layer_core_send_request(msg);
         }
 
-        if (replica.index != msg[1]){
+        if (replica.index != msg->data[1]){
 	        // Same index twice -> some other server may be down
-	        replica.index = msg[1];
+	        replica.index = msg->data[1];
         }
 
 	    replica.index++;
@@ -716,9 +744,9 @@ static void handle_accept(uintptr_t* msg)
 	        } else {
 
                 // TODO SEND VERIFY to leadera
-                set_tag(msg, ONE_VERIFY);
-                set_client_id(msg, replica.id);
-                msg[4] = crc;
+                set_tag(msg->data, ONE_VERIFY);
+                set_client_id(msg->data, replica.id);
+                msg->data[4] = crc;
 		        printf("Replica %d: sent verify \n", replica.id);
 	        }
 	    }
@@ -730,9 +758,9 @@ static void handle_accept(uintptr_t* msg)
     }
 }
 
-static void handle_learn(uintptr_t* msg)
+static void handle_learn(struct smlt_msg* msg)
 {
-
+    errval_t err;
 #ifdef MEASURE_TP
     if (!timer_started){
        total_start = rdtsc();
@@ -743,19 +771,19 @@ static void handle_learn(uintptr_t* msg)
     replica.voted = false;
     replica.change = false;
 #ifdef VERIFY
-    rid[msg[1]] = get_request_id(msg);
-    cid[msg[1]] = get_client_id(msg);
+    rid[msg->data[1]] = get_request_id(msg);
+    cid[msg->data[1]] = get_client_id(msg);
 #endif
 
-    bool success = execute(msg);
+    bool success = execute(msg->data);
 
     if (replica.alg_below != ALG_NONE) {
 	    com_layer_core_send_request(msg);
     }
 
-    if (replica.index != msg[1]){
+    if (replica.index != msg->data[1]){
 	    // Same index twice -> some other server may be down
-	    replica.index = msg[1];
+	    replica.index = msg->data[1];
     }
 
     replica.index++;
@@ -770,14 +798,18 @@ static void handle_learn(uintptr_t* msg)
 	        // don't care for reply on core level
 	        if (replica.level == NODE_LEVEL) {
 #ifndef KVS
-                set_tag(msg, RESP_TAG);
-                mp_send7(replica.clients[get_client_id(msg)], msg[0], msg[1],
-                         msg[2], msg[3], msg[4], msg[5], msg[6]);
+                set_tag(msg->data, RESP_TAG);
+                err = smlt_send(replica.clients[get_client_id(msg->data)], msg);
+                if (smlt_err_is_fail(err)) {
+                    // TODO
+                }
 #endif
  	        } else {
-                set_tag(msg, RESP_TAG);
-                mp_send7(replica.started_from_id, msg[0], msg[1],
-                         msg[2], msg[3], msg[4], msg[5], msg[6]);
+                set_tag(msg->data, RESP_TAG);
+                err = smlt_send(replica.started_from_id, msg);
+                if (smlt_err_is_fail(err)) {
+                    // TODO
+                }
 	        }
 #ifdef MEASURE_TP
 	        num_reqs++;
@@ -796,11 +828,11 @@ static void handle_learn(uintptr_t* msg)
 	    	crcs[replica.current_leader] = crc;
 	    } else {
 
-            set_tag(msg, ONE_VERIFY);
-            set_client_id(msg, replica.id);
-            msg[4] = crc;
-            msg->req.tag = ONE_VERIFY;
-            msg->req.client_id = replica.id;
+            set_tag(msg->data, ONE_VERIFY);
+            set_client_id(msg->data, replica.id);
+            msg->data[4] = crc;
+            //msg->req.tag = ONE_VERIFY;
+            //msg->req.client_id = replica.id;
 		    printf("Replica %d: sent verify \n", replica.id);
 	    }
 	}
@@ -808,10 +840,10 @@ static void handle_learn(uintptr_t* msg)
 
 }
 
-static void handle_abandon(uintptr_t* msg)
+static void handle_abandon(struct smlt_msg* msg)
 {
     // still leader
-    if (get_client_id(msg) == replica.id) {
+    if (get_client_id(msg->data) == replica.id) {
 	    return;
     }
 
@@ -831,18 +863,18 @@ static void handle_abandon(uintptr_t* msg)
  *  msg->n the answer to the request i.e. is it the leader
  *  msg->index == 1 means it is a response
  */
-static void handle_is_current_leader(uintptr_t* msg)
+static void handle_is_current_leader(struct smlt_msg* msg)
 {
 #ifdef DEBUG_FAIL
      printf("Replica %d: received is current leader \n", replica.id);
 #endif
-    if (get_client_id(msg) == replica.current_leader) {
-        msg[1] = 1;
-        msg[2] = 1;
+    if (get_client_id(msg->data) == replica.current_leader) {
+        msg->data[1] = 1;
+        msg->data[2] = 1;
         // TODO send response
     } else {
-        msg[1] = 1;
-        msg[2] = 0;
+        msg->data[1] = 1;
+        msg->data[2] = 0;
         // TODO SEND response
     }
 }
@@ -852,12 +884,12 @@ static void handle_is_current_leader(uintptr_t* msg)
  *  msg->n the answer i.e. the current acceptor
  *  msg->index == 1 means it is a response
  */
-static void handle_get_current_acceptor(uintptr_t* msg)
+static void handle_get_current_acceptor(struct smlt_msg* msg)
 {
     if (!replica.voted) {
-        msg[1] = 1;
-        msg[2] = replica.current_acceptor;
-        set_client_id(msg, replica.id);
+        msg->data[1] = 1;
+        msg->data[2] = replica.current_acceptor;
+        set_client_id(msg->data, replica.id);
 	    replica.voted = true;
 	    replica.change = true;
 #ifdef DEBUG_FAIL
@@ -870,7 +902,7 @@ static void handle_get_current_acceptor(uintptr_t* msg)
 #endif
 }
 
-static void handle_is_current_leader_response(uintptr_t* msg)
+static void handle_is_current_leader_response(struct smlt_msg* msg)
 {
      // dont need myself for majority since already voted for myself
     int majority;
@@ -880,7 +912,7 @@ static void handle_is_current_leader_response(uintptr_t* msg)
         majority = ((replica.num_replicas-1)/2);
     }
 
-    if ((msg[2] == 1)) {
+    if ((msg->data[2] == 1)) {
     	replica.num_success++;
     	// reached a majority
 	    if (replica.num_success == majority) {
@@ -895,20 +927,20 @@ static void handle_is_current_leader_response(uintptr_t* msg)
             printf("Replica %d: multicast acceptor change \n", replica.id);
 #endif
 	        replica.current_n++;
-            set_tag(msg, ONE_CHANGE_ACCEPTOR);
-            msg[2] = replica.current_acceptor;
+            set_tag(msg->data, ONE_CHANGE_ACCEPTOR);
+            msg->data[2] = replica.current_acceptor;
             // TODO BROADCAST change key fig
 
         	replica.num_success = 0;
 
 	        printf("Replica %d: sending prepare to %d \n", replica.id, replica.current_acceptor);
             // TODO SEND replicas.last_entry to accetpor
-            set_tag(msg, ONE_ACC);
+            set_tag(msg->data, ONE_ACC);
         }
     }
 }
 
-static void handle_get_current_acceptor_response(uintptr_t* msg)
+static void handle_get_current_acceptor_response(struct smlt_msg* msg)
 {
 #ifdef DEBUG_FAIL
     printf("Replica %d: get current acceptor response \n", replica.id);
@@ -920,25 +952,24 @@ static void handle_get_current_acceptor_response(uintptr_t* msg)
         majority = ((replica.num_replicas-1)/2);
     }
     // reached a majority
-    replica.current_acceptor_votes[msg[2]]++;
-    if (replica.current_acceptor_votes[msg[2]] == majority) {
+    replica.current_acceptor_votes[msg->data[2]]++;
+    if (replica.current_acceptor_votes[msg->data[2]] == majority) {
 	    // announce leader change
-	    replica.current_acceptor = msg[2];
+	    replica.current_acceptor = msg->data[2];
 	    replica.is_dead[replica.current_leader] = true;
 
 	    replica.current_n++;
 
 	    // announce leader change
 	    replica.current_leader = replica.id;
-        // TODO broadcast change leader
-        set_tag(msg, ONE_CHANGE_LEADER);
-        msg[2] = replica.id;
+        set_tag(msg->data, ONE_CHANGE_LEADER);
+        msg->data[2] = replica.id;
 
 	    printf("Replica %d: I'm the new leader \n", replica.id);
 	    printf("Replica %d: sending prepare to %d \n", replica.id, replica.current_acceptor);
 
         // TODO SEND to new acceptor
-        set_tag(msg, ONE_PREP);
+        set_tag(msg->data, ONE_PREP);
         /*
 	    send_prepare(replica.replica_bindings[replica.current_acceptor],
 			replica.last_entry.client_id,
@@ -954,7 +985,7 @@ static void handle_get_current_acceptor_response(uintptr_t* msg)
     }
 }
 
-static void handle_change_leader(uintptr_t* msg)
+static void handle_change_leader(struct smlt_msg* msg)
 {
 #ifdef DEBUG_FAIL
            printf("Replica %d: received change key figure \n", replica.id);
@@ -965,10 +996,10 @@ static void handle_change_leader(uintptr_t* msg)
 	    // no longer leader
 	}
 
-	if (get_client_id(msg) != replica.current_leader) {
+	if (get_client_id(msg->data) != replica.current_leader) {
 	    // new leader
     	replica.is_dead[replica.current_leader] = true;
-	    replica.current_leader = get_client_id(msg);
+	    replica.current_leader = get_client_id(msg->data);
 	    replica.leader_timeout = false;
 	} else {
 	        // acceptor changed TODO
@@ -979,31 +1010,31 @@ static void handle_change_leader(uintptr_t* msg)
 #endif
 }
 
-static void handle_change_acceptor(uintptr_t* msg)
+static void handle_change_acceptor(struct smlt_msg* msg)
 {
-    if (get_client_id(msg) == replica.current_leader) {
+    if (get_client_id(msg->data) == replica.current_leader) {
         // acceptor changed by leader
 	    replica.is_dead[replica.current_acceptor] = true;
-	    replica.current_acceptor = msg[2];
+	    replica.current_acceptor = msg->data[2];
 	    replica.acceptor_timeout = false;
 	} else {
 	        // leader change TODO
     }
 }
 
-static void handle_is_alive(uintptr_t* msg)
+static void handle_is_alive(struct smlt_msg* msg)
 {
-     msg[1] = 1;
-     msg[2] = replica.id;
+     msg->data[1] = 1;
+     msg->data[2] = replica.id;
      // TODO SEND response
 }
 
 
-static void handle_is_alive_response(uintptr_t* msg)
+static void handle_is_alive_response(struct smlt_msg* msg)
 {
-	if (msg[2] == replica.current_leader) {
+	if (msg->data[2] == replica.current_leader) {
 	   replica.leader_timeout = false;
-	} else if (msg[2] == replica.current_acceptor) {
+	} else if (msg->data[2] == replica.current_acceptor) {
 	   replica.acceptor_timeout = false;
 	}
 }
@@ -1042,7 +1073,7 @@ void init_replica_onepaxos(uint8_t id,
 	replica.cores = cores;
     replica.current_core = current_core;
 	// just set 0 as the leader at the beginning
-#ifdef LIBSYNC
+#ifdef SMLT
 	replica.current_leader = 1;
 	replica.current_acceptor = 0;
 #else
@@ -1104,18 +1135,7 @@ void init_replica_onepaxos(uint8_t id,
                             replica.cores, replica.node_size,
                             get_cmd_size(), replica.exec_fn);
     }
-	// connect to all replicas
-    // TODO CONNECTION SETUP
-#ifndef LIBSYNC
-    if (replica.id == 1) {
-        for (int i = 0; i < replica.num_replicas; i++) {
-            if (i == 1) {
-                continue;
-            }
-            mp_connect(current_core, replicas[i]);
-        }
-    }
-#endif
+
     // TODO Start periodic functons
     if (id == 0 && (level != CORE_LEVEL)) {
 	   // err = periodic_event_create(&acceptor_alive, get_default_waitset(),

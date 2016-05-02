@@ -21,6 +21,7 @@
 #include <smlt_node.h>
 #include <smlt_broadcast.h>
 #include <smlt_reduction.h>
+#include <smlt_message.h>
 
 #include "incremental_stats.h"
 #include "crc.h"
@@ -63,8 +64,6 @@ typedef struct tpc_replica_t{
     uint8_t *cores;
     uint8_t current_core;
 
-    // smlt related
-    struct smlt_context* ctx;
 } tpc_replica_t;
 
 
@@ -77,11 +76,11 @@ __thread uint32_t* crcs;
 __thread uint32_t crc_count;
 #endif
 
-static void handle_request(uintptr_t* msg);
-static void handle_prepare(uintptr_t* msg);
-static void handle_ready(uintptr_t* msg);
-static void handle_commit(uintptr_t* msg);
-static void handle_setup(uintptr_t* msg);
+static void handle_request(struct smlt_msg* msg);
+static void handle_prepare(struct smlt_msg* msg);
+static void handle_ready(struct smlt_msg* msg);
+static void handle_commit(struct smlt_msg* msg);
+static void handle_setup(struct smlt_msg* msg);
 #ifdef VERIFY
 static void handle_verify(uintptr_t* msg);
 static crc_t verify(void);
@@ -100,12 +99,17 @@ static uint8_t runs = 0;
 static double run_res[7];
 static incr_stats avg;
 
+
+// smlt related
+extern struct smlt_context* ctx;
+extern struct smlt_topology* topo;
+
 static void print_results_tpc(tpc_replica_t* rep) {
 
     init_stats(&avg);
     char* f_name = (char*) malloc(sizeof(char)*100);
 #ifdef SMELT
-    sprintf(f_name, "results/tp_%s_tpc_num_%d_numc_%d", topo_get_name(), 
+    sprintf(f_name, "results/tp_%s_tpc_num_%d_numc_%d", "adaptivetree", 
             rep->num_replicas, rep->num_clients);
 #else
     sprintf(f_name, "results/tp_tpc_below_%d_num_%d_numc_%d", 
@@ -117,7 +121,7 @@ static void print_results_tpc(tpc_replica_t* rep) {
     RESULT_PRINTF(f, "#####################################################");
     RESULT_PRINTF(f, "#####################\n");
     RESULT_PRINTF(f, "algo_below %d num_clients %d topo %s \n", rep->alg_below, 
-            rep->num_clients, topo_get_name());
+            rep->num_clients, "adaptivetree");
     for (int i = 2; i < 6; i++) {
         RESULT_PRINTF(f, "%10.3f \n", run_res[i]);
         add(&avg, run_res[i]);
@@ -165,9 +169,9 @@ static void* results_tpc(void* arg)
 /*
  * message handlers
  */
-static void message_handler_tpc(uintptr_t *msg) 
+static void message_handler_tpc(struct smlt_msg *msg) 
 {
-    switch (get_tag(msg)) {
+    switch (get_tag(msg->data)) {
         case SETUP_TAG:
             handle_setup(msg);
             break; 
@@ -188,7 +192,7 @@ static void message_handler_tpc(uintptr_t *msg)
             handle_commit(msg);
             break; 
         default:
-            printf("unknown type in message_handler %lu \n", msg[0]);
+            printf("unknown type in message_handler %lu \n", msg->data[0]);
     }
 }
 
@@ -206,7 +210,6 @@ bool is_client(int n)
 
 void message_handler_loop_tpc(void)
 {
-    struct smlt_node node;
     errval_t err;
 
     struct smlt_msg* message = smlt_message_alloc(56);
@@ -231,11 +234,8 @@ void message_handler_loop_tpc(void)
 
 
         while (true) {
-            // TODO implement can recv
-            if (true) {
-                node = smlt_node_get_by_id(cores[j])
-                err = smlt_node_recv(node, message);      
-                mp_receive7(cores[j], message);
+            if (smlt_can_recv(cores[j])) {
+                err = smlt_recv(cores[j], message);      
                 if (get_tag(&message->data[0]) == SETUP_TAG) {
                     message_handler_tpc(message);
                 } else {
@@ -276,7 +276,8 @@ void message_handler_loop_tpc(void)
 void message_handler_loop_tpc(void)
 {
 
-    uintptr_t* message = (uintptr_t*) malloc(sizeof(uintptr_t)*8);
+    errval_t err;
+    struct smlt_msg* message = smlt_message_alloc(56);
     if (tpc_replica.id == 0) {
         int j = 0;
         uint8_t* all_cores = (uint8_t*) malloc(sizeof(uint8_t)* (tpc_replica.num_replicas +
@@ -291,8 +292,11 @@ void message_handler_loop_tpc(void)
         }
     
         while (true) {
-            if (mp_can_receive(all_cores[j])) {
-                mp_receive7(all_cores[j], message);
+            if (smlt_can_recv(all_cores[j])) {
+                err = smlt_recv(all_cores[j], message);
+                if (smlt_err_is_fail(err)) {
+                    // TODO;
+                }
                 message_handler_tpc(message);
             }    
             j++;
@@ -303,8 +307,11 @@ void message_handler_loop_tpc(void)
     } else {
        
         while (true) {
-            if (mp_can_receive(tpc_replica.replicas[0])) {
-                mp_receive7(tpc_replica.replicas[0], message);
+            if (smlt_can_recv(tpc_replica.replicas[0])) {
+                err = smlt_recv(tpc_replica.replicas[0], message);
+                if (smlt_err_is_fail(err)) {
+                    // TODO;
+                }
                 message_handler_tpc(message);
             }    
         }
@@ -342,23 +349,27 @@ static void handle_verify(tpc_msg_t* msg)
 }
 #endif
 
-static void handle_setup(uintptr_t* msg)
+static void handle_setup(struct smlt_msg* msg)
 {
-    uintptr_t core = get_client_id(msg);
+
+    errval_t err;
+    uintptr_t core = get_client_id(msg->data);
     for (int i = 0; i < tpc_replica.num_clients; i++) {
         if (tpc_replica.clients[i] == core) {
-            msg[4] = i;
+            msg->data[4] = i;
         }
     }
 
-    mp_send7(core,
-             msg[0], msg[1], msg[2], msg[3], msg[4],
-             msg[5], msg[6]);
+    err = smlt_send(core, msg);
+    if (smlt_err_is_fail(err)) {
+       // TODO   
+    }
 }
 
 
-static void handle_request(uintptr_t* msg) 
+static void handle_request(struct smlt_msg* msg) 
 {
+    errval_t err;
 #ifdef DEBUG_REPLICA
     printf("Replica %d: received request client %lu \n", replica.id, msg[1]);
 #endif
@@ -370,36 +381,42 @@ static void handle_request(uintptr_t* msg)
 #endif
     if (tpc_replica.id == 0) {
         // reset counters for acks/ready messages
-        tpc_replica.ready_counter[get_client_id(msg)] = 0;
-        tpc_replica.ack_counter[get_client_id(msg)] = 0;
+        tpc_replica.ready_counter[get_client_id(msg->data)] = 0;
+        tpc_replica.ack_counter[get_client_id(msg->data)] = 0;
 
         // send to all replicas
-        set_tag(msg, TPC_PREP);
-#ifdef LIBSYNC
-        mp_send_ab7(msg[0], msg[1], msg[2], msg[3], msg[4], msg[5], msg[6]);
+        set_tag(msg->data, TPC_PREP);
+#ifdef SMLT
+        smlt_broadcast(ctx, msg);
 #else
         for (int i = 1; i < tpc_replica.num_replicas; i++) {
-            mp_send7(tpc_replica.replicas[i], msg[0],
-                     msg[1], msg[2], msg[3], msg[4] , msg[5],
-                     msg[6]);
+            err = smlt_send(tpc_replica.replicas[0], msg);
+            if (smlt_err_is_fail(err)) {
+                // TODO
+            }
         }   
 #endif
     } else {
-        mp_send7(tpc_replica.replicas[0], msg[0], msg[1], msg[2], msg[3], msg[4],
-                 msg[5], msg[6]);
+        err = smlt_send(tpc_replica.replicas[0], msg);
+        if (smlt_err_is_fail(err)) {
+            // TODO
+        }
     }
 }
 
-static void handle_prepare(uintptr_t* msg) 
+static void handle_prepare(struct smlt_msg* msg) 
 {
 #ifdef DEBUG_REPLICA
     printf("Replica %d: received prepare cid %lu, rid %lu\n", 
-                                tpc_replica.id, msg[1], msg[2]);
+                                tpc_replica.id, msg->data[1], msg->data[2]);
 #endif
+    errval_t err;
     if (tpc_replica.id != 0) {
-        set_tag(msg, TPC_RDY);
-        mp_send7(tpc_replica.replicas[0], msg[0], msg[1], msg[2], msg[3],
-                 msg[4], msg[5], msg[6]);
+        set_tag(msg->data, TPC_RDY);
+        err = smlt_send(tpc_replica.replicas[0], msg);
+        if (smlt_err_is_fail(err)) {
+            // TODO
+        }   
     } else {
         printf("Replica %d: leader shoult not receive prepare \n", 
                                                      tpc_replica.id);
@@ -407,23 +424,26 @@ static void handle_prepare(uintptr_t* msg)
     }
 }
 
-#ifdef LIBSYNC
+#ifdef SMLT
 
-static void handle_ready(uintptr_t* msg)
+static void handle_ready(struct smlt_msg* msg)
 {
+    errval_t err;
     if (tpc_replica.id == 0) {
-        set_tag(msg, TPC_COM);
-        msg[3] = tpc_replica.index;       
+        set_tag(msg->data, TPC_COM);
+        msg->data[3] = tpc_replica.index;       
         tpc_replica.index++;
  
-        mp_send_ab7(msg[0], msg[1], msg[2], msg[3], msg[4], msg[5], msg[6]);    
+        smlt_broadcast(ctx, msg);
   
-        update_value(&msg[4]);
+        update_value(&msg->data[4]);
 
-        set_tag(msg, RESP_TAG);
-        mp_send7(tpc_replica.clients[get_client_id(msg)], msg[0], msg[1], 
-                 msg[2], msg[3], msg[4], msg[5], msg[6]);
-
+        set_tag(msg->data, RESP_TAG);
+ 
+        err = smlt_send(tpc_replica.clients[get_client_id(msg->data)], msg);       
+        if (smlt_err_is_fail(err)) {
+            // TODO
+        }   
         // LEAF sends reply to client
 #ifdef MEASURE_TP
         num_reqs++;
@@ -434,31 +454,34 @@ static void handle_ready(uintptr_t* msg)
     }
 }
 #else
-static void handle_ready(uintptr_t* msg)
+static void handle_ready(struct smlt_msg* msg)
 {
+    errval_t err;
 #ifdef DEBUG_REPLICA
     printf("Replica %d: received ready cid %lu, rid %lu \n", 
                                tpc_replica.id, msg[1], msg[2]);
 #endif
     if (tpc_replica.id == 0) {
-        tpc_replica.ready_counter[get_client_id(msg)]++;   
+        tpc_replica.ready_counter[get_client_id(msg->data)]++;   
 
-        if (tpc_replica.ready_counter[get_client_id(msg)] >= 
+        if (tpc_replica.ready_counter[get_client_id(msg->data)] >= 
              (tpc_replica.num_replicas-1)) {
             // TODO Broadcast COMMIT
-            set_tag(msg, TPC_COM);
+            set_tag(msg->data, TPC_COM);
             tpc_replica.index++;
-            msg[3] = tpc_replica.index;
+            msg->data[3] = tpc_replica.index;
 
             for (int i = 1; i < tpc_replica.num_replicas; i++) {
-                mp_send7(tpc_replica.replicas[i], msg[0], msg[1], msg[2], 
-                         msg[3], msg[4], msg[5], msg[6]);
+                err = smlt_send(tpc_replica.replicas[i], msg);
+                if (smlt_err_is_fail(err)) {
+                    // TODO
+                }
             }
 #ifdef VERIFY
             rid_history[replica.index] = msg[2];
             cid_history[replica.index] = msg[1];
 #endif	
-            update_value(&msg[4]);
+            update_value(&msg->data[4]);
             
             // send to CORE level            
             if ((tpc_replica.alg_below != ALG_NONE)) {
@@ -466,25 +489,21 @@ static void handle_ready(uintptr_t* msg)
             }
 
             if (tpc_replica.level == NODE_LEVEL) {
-                set_tag(msg, RESP_TAG);
-                mp_send7(tpc_replica.clients[get_client_id(msg)], msg[0], msg[1], 
-                         msg[2], msg[3], msg[4], msg[5], msg[6]);
-
+                set_tag(msg->data, RESP_TAG);
+                err = smlt_send(tpc_replica.clients[get_client_id(msg->data)], msg);
+                if (smlt_err_is_fail(err)) {
+                    // TODO
+                }
             } else {
-                set_tag(msg, RESP_TAG);
-                mp_send7(tpc_replica.started_from_id, msg[0], msg[1], 
-                         msg[2], msg[3], msg[4], msg[5], msg[6]);
+                set_tag(msg->data, RESP_TAG);
+                err = smlt_send(tpc_replica.started_from_id, msg);
+                if (smlt_err_is_fail(err)) {
+                    // TODO
+                }
             }
 #ifdef MEASURE_TP
             num_reqs++;
 #endif
-            /*
-#ifdef VERIFY
-               if (replica.index == (replica.num_requests)) {		
-                   crcs[0] = verify;            
-                }
-#endif
-             */
             return;
         }
     } else {
@@ -494,11 +513,11 @@ static void handle_ready(uintptr_t* msg)
 }
 #endif
 
-static void handle_commit(uintptr_t* msg) 
+static void handle_commit(struct smlt_msg* msg) 
 {
     if (tpc_replica.id != 0) {
         // execute request
-        update_value(&msg[4]);   
+        update_value(&msg->data[4]);   
         if (tpc_replica.alg_below != ALG_NONE) {
             com_layer_core_send_request(msg);
         }
@@ -596,14 +615,6 @@ void init_replica_tpc(uint8_t id,
                       tpc_replica.current_core, 
                       tpc_replica.cores, tpc_replica.node_size, 3*sizeof(uint64_t), 
                       tpc_replica.exec_fn);
-    }
-
-    if (id == 0) {
-#ifndef LIBSYNC
-        for (int i = 1; i < tpc_replica.num_replicas; i++) {
-            mp_connect(current_core, replicas[i]);
-        }
-#endif
     }
 
 #ifdef MEASURE_TP

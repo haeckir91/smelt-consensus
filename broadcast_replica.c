@@ -17,6 +17,9 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <time.h>
+#include <smlt.h>
+#include <smlt_broadcast.h>
+#include <smlt_context.h>
 
 #include "crc.h"
 #include "incremental_stats.h"
@@ -24,8 +27,6 @@
 #include "broadcast_replica.h"
 #include "internal_com_layer.h"
 #include "client.h"
-#include "mp.h"
-#include "topo.h"
 
 
 #define BROAD_COMMIT 4
@@ -60,12 +61,13 @@ typedef struct replica_t{
 } replica_t;
 
 static __thread replica_t replica;
+extern struct smlt_context* ctx;
 
 static void update_value(void* cmd);
-static void handle_request(uintptr_t* msg);
+static void handle_request(struct smlt_msg* msg);
 
-static void handle_setup(uintptr_t* msg);
-static void handle_commit(uintptr_t* msg);
+static void handle_setup(struct smlt_msg* msg);
+static void handle_commit(struct smlt_msg* msg);
 
 
 #ifdef MEASURE_TP
@@ -82,8 +84,8 @@ static void print_results_broad(replica_t* rep) {
 
     init_stats(&avg);
     char* f_name = (char*) malloc(sizeof(char)*100);
-#ifdef LIBSYNC
-    sprintf(f_name, "results/tp_%s_broad_num_%d_numc_%d", topo_get_name(), 
+#ifdef SMLT
+    sprintf(f_name, "results/tp_%s_broad_num_%d_numc_%d", "adaptivetree", 
             rep->num_replicas, rep->num_clients);
 #else
     sprintf(f_name, "results/tp_broad_below_%d_num_%d_numc_%d", 
@@ -95,7 +97,7 @@ static void print_results_broad(replica_t* rep) {
     RESULT_PRINTF(f, "#####################################################");
     RESULT_PRINTF(f, "#####################\n");
     RESULT_PRINTF(f, "algo_below %d num_clients %d topo %s \n", rep->alg_below, 
-            rep->num_clients, topo_get_name());
+            rep->num_clients, "adaptivetree");
     for (int i = 2; i < 6; i++) {
         RESULT_PRINTF(f, "%10.3f \n", run_res[i]);
         add(&avg, run_res[i]);
@@ -140,9 +142,9 @@ static void* results(void* arg)
 }
 #endif
 
-static void message_handler_broadcast(uintptr_t* msg) 
+static void message_handler_broadcast(struct smlt_msg* msg) 
 {
-    switch (get_tag(msg)) {
+    switch (get_tag(msg->data)) {
         case SETUP_TAG:
             handle_setup(msg);
             break;
@@ -153,21 +155,24 @@ static void message_handler_broadcast(uintptr_t* msg)
             handle_commit(msg);
             break; 
         default:
-            printf("unknown type in queue %lu \n", msg[0]);
+            printf("unknown type in queue %lu \n", msg->data[0]);
     }
 }
 
-#ifdef LIBSYNC
+#ifdef SMLT
 void message_handler_loop_broadcast(void)
 {
-
-    uintptr_t* message = (uintptr_t*) malloc(sizeof(uintptr_t)*8);
+    errval_t err;
+    struct smlt_msg* message = smlt_message_alloc(56);
     if (replica.id == 0) {
         int j = 0;
     
         while (true) {
-            if (mp_can_receive(replica.clients[j])) {
-                mp_receive7(replica.clients[j], message);
+            if (smlt_can_recv(replica.clients[j])) {
+                err = smlt_recv(replica.clients[j], message);
+                if (smlt_err_is_fail(err)){
+                    // TODO
+                }
                 message_handler_broadcast(message);
             }    
             j++;
@@ -178,7 +183,10 @@ void message_handler_loop_broadcast(void)
     } else {
        
         while (true) {
-            mp_receive_forward7(message);
+            err = smlt_broadcast(ctx, message);
+            if (smlt_err_is_fail(err)){
+                // TODO
+            }
             message_handler_broadcast(message);
         }
     }
@@ -186,13 +194,17 @@ void message_handler_loop_broadcast(void)
 #else
 void message_handler_loop_broadcast(void) 
 {
-    uintptr_t* message = (uintptr_t*) malloc(sizeof(uintptr_t)*8);
+    errval_t err;
+    struct smlt_msg* message = smlt_message_alloc(56);
     if (replica.id == 0) {
         int j = 0;
     
         while (true) {
-            if (mp_can_receive(replica.clients[j])) {
-                mp_receive7(replica.clients[j], message);
+            if (smlt_can_recv(replica.clients[j])) {
+                err = smlt_recv(replica.clients[j], message);   
+                if (smlt_err_is_fail(err)) {
+                    // TODO
+                }
                 message_handler_broadcast(message);
             }    
             j++;
@@ -203,8 +215,12 @@ void message_handler_loop_broadcast(void)
     } else {
        
         while (true) {
-            if (mp_can_receive(replica.replicas[0])) {
-                mp_receive7(replica.replicas[0], message);
+            if (smlt_can_recv(replica.replicas[0])) {
+                err = smlt_recv(replica.replicas[0], message);
+                if (smlt_err_is_fail(err)) {
+                    // TODO
+                }
+
                 message_handler_broadcast(message);
             }    
         }
@@ -217,22 +233,25 @@ void message_handler_loop_broadcast(void)
  * Handler functions for Message Passing
  */
 
-static void handle_setup(uintptr_t* msg)
+static void handle_setup(struct smlt_msg* msg)
 {
-    uintptr_t core = get_client_id(msg);
+    errval_t err;
+    uintptr_t core = get_client_id(msg->data);
     for (int i = 0; i < replica.num_clients; i++) {
         if (replica.clients[i] == core) {
-            msg[4] = i;
+            msg->data[4] = i;
         }
     }
 
-    mp_send7(core,
-             msg[0], msg[1], msg[2], msg[3], msg[4],
-             msg[5], msg[6]);
+    err = smlt_send(core, msg);
+    if (smlt_err_is_fail(err)) {
+        //  TODO
+    }
 }
 
-static void handle_request(uintptr_t* msg) 
+static void handle_request(struct smlt_msg* msg) 
 {
+    errval_t err;
 #ifdef MEASURE_TP
     if (!timer_started) {
         total_start = rdtsc();
@@ -242,15 +261,19 @@ static void handle_request(uintptr_t* msg)
 #endif
     if (replica.id == 0) {
         // TODO SEND BROADCAST
-        set_tag(msg, BROAD_COMMIT);
+        set_tag(msg->data, BROAD_COMMIT);
 
-#ifdef LIBSYNC
-        mp_send_ab7(msg[0], msg[1], msg[2], msg[3], msg[4], msg[5],
-                    msg[6]);
+#ifdef SMLT
+        err = smlt_broadcast(ctx, msg);
+        if (smlt_err_is_fail(err)) {
+            // TODO
+        }
 #else
         for (int i = 1; i < replica.num_replicas; i++) {
-            mp_send7(replica.replicas[i], msg[0], msg[1], msg[2], msg[3],
-                     msg[4], msg[5], msg[6]);
+            err = smlt_send(replica.replicas[i], msg);
+            if (smlt_err_is_fail(err)) {
+                // TODO
+            }
         }
 #endif
         // send reply that broadcast is finished
@@ -262,13 +285,17 @@ static void handle_request(uintptr_t* msg)
                 com_layer_core_send_request(msg);
             }
    
-            update_value(&msg[4]);
-            mp_send7(replica.clients[get_client_id(msg)], msg[0], msg[1], 
-                    msg[2], msg[3], msg[4], msg[5], msg[6]);
+            update_value(&msg->data[4]);
+            err = smlt_send(replica.clients[get_client_id(msg->data)], msg);
+            if (smlt_err_is_fail(err)) {
+                // TODO
+            }
         } else {
-            update_value(&msg[4]);
-            mp_send7(replica.started_from, msg[0], msg[1], 
-                    msg[2], msg[3], msg[4], msg[5], msg[6]);
+            update_value(&msg->data[4]);
+            err = smlt_send(replica.started_from, msg);
+            if (smlt_err_is_fail(err)) {
+                // TODO
+            }
             // TODO SEND TO OTHER REPLICA
         }
     } else {
@@ -276,7 +303,7 @@ static void handle_request(uintptr_t* msg)
     }
 }
 
-static void handle_commit(uintptr_t* msg) 
+static void handle_commit(struct smlt_msg* msg) 
 {
     if (replica.id != 0) {
         // TODO forward request if we use a tree
@@ -285,7 +312,7 @@ static void handle_commit(uintptr_t* msg)
         if (replica.alg_below != ALG_NONE) {
             com_layer_core_send_request(msg);
         }
-        update_value(&msg[4]);
+        update_value(&msg->data[4]);
     } else {
         printf("Replica %d: leader should not receive commit\n", replica.id);
         return;
@@ -347,14 +374,6 @@ void init_replica_broadcast(uint8_t id,
 
     // connect to replicas
     if (id == 0) {
-#ifndef LIBSYNC
-        for (int i = 1; i < replica.num_replicas; i++) {
-            mp_connect(current_core, replicas[i]);
-        }
-#endif
-        if (replica.level == CORE_LEVEL) {
-            mp_connect(current_core, replica.started_from);
-        }
 #ifdef MEASURE_TP
         pthread_t tid;
         pthread_create(&tid, NULL, results, &replica);

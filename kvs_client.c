@@ -19,13 +19,13 @@
 #include <unistd.h>
 #include <numa.h>
 #include <pthread.h>
+#include <smlt.h>
+#include <smlt_message.h>
 
 #include "client.h"
 #include "consensus.h"
 #include "kvs.h"
-#include "sync.h"
 #include "incremental_stats.h"
-#include "topo.h"
 
 
 struct kvs_client {
@@ -33,8 +33,8 @@ struct kvs_client {
     int num_clients;
     uintptr_t* local_mem;
     int run;
-    int first = true;
-    bool exit = false;
+    int first;
+    bool exit;
     uint64_t num_reads;
     uint64_t num_writes;
     uint64_t num_large;
@@ -90,7 +90,7 @@ static void* measure_thread(void* args)
 static void print_results_file(void) {
 
     char* f_name = (char*) malloc(sizeof(char)*100);
-#ifdef LIBSYNC
+#ifdef SMLT
     sprintf(f_name, "results/client_kvs_%s_id_%d_num_%d",
                     topo_get_name(), client->id, client->num_clients);
 
@@ -172,6 +172,8 @@ int init_kvs_client(int current_core,
     int numa_node = numa_node_of_cpu(current_core);
     client->local_mem = (uintptr_t*) kvs_memory[numa_node];
     assert(client->local_mem != NULL);
+    client->first = true;
+    client->exit = false;
     client->num_reads = 0;
     client->num_large = 0;
     client->num_writes = 0;
@@ -193,18 +195,6 @@ int init_kvs_client(int current_core,
 void* init_benchmark_kvs_client(void* args)
 {
     benchmark_client_args_t* cl = (benchmark_client_args_t*) args;
-#ifdef LIBSYNC
-    if (cl->num_replicas < cl->num_cores) {
-        __thread_init(cl->core, cl->num_cores);
-        if (cl->dummy) {
-            return NULL;
-        }
-    } else {
-        __lowlevel_thread_init(cl->core);
-    }
-#else
-    __lowlevel_thread_init(cl->core);
-#endif
     init_kvs_client(cl->core,
                     cl->protocol,
                     cl->protocol_below,

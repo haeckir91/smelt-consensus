@@ -1,4 +1,4 @@
-all: objs clean start_bench start_bench_libsync
+all: objs clean start_bench start_bench_smelt
 
 C:=gcc
 MAKEDEPEND:=makedepend -Y
@@ -8,7 +8,7 @@ INC_DIR = -I../includes/ -I../../smelt-runtime-system/inc/backends/ -I../../smel
 LIB = -L../../smelt-runtime-system/
 
 CFLAGS    = -g -Wall -std=c99
-CFLAGS   += -DLIBNUMA_ -lnuma
+CFLAGS   += -DLIBNUMA_ -lnuma -lm
 CFLAGS   += -D_GNU_SOURCE -pthread
 
 SMLT_FLAG = -DSMELT=1
@@ -48,9 +48,9 @@ clobber:
 	-rm -f *.o
 	-rm -f *~
 
-start_bench: ; $(C) $(CFLAGS) $(LIB) $(INC_DIR) $(c_FILES) -o start_bench -lsmltrt -lnuma
+start_bench: ; $(C) $(CFLAGS) $(LIB) $(INC_DIR) $(c_FILES) -o start_bench -lsmltrt -lsmltcontrib -lnuma -lm
 
-start_bench_smelt: ; $(C) $(CFLAGS) $(SMLT_FLAG) $(LIB) $(INC_DIR) $(c_FILES) -o start_bench_smelt -lsmltrt -lnuma
+start_bench_smelt: ; $(C) $(CFLAGS) $(SMLT_FLAG) $(LIB) $(INC_DIR) $(c_FILES) -o start_bench_smelt -lsmltrt -lsmltcontrib -lnuma -lm
 
 depend:
 	$(MAKEDEPEND) $(INCS) $(SINCS) $(C_FILES)

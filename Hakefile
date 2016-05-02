@@ -45,7 +45,7 @@
         ],
         addLibraries = [ "sync_ump", "bench" ],
         addIncludes = [ "/lib/sync/sync/inc", "/lib/sync/sync/inc/backends", "/lib/sync/umpq", "includes" ],
-        addCxxFlags = [ "-DLIBSYNC" ],
+        addCxxFlags = [ "-DSMLT" ],
         architectures = [ "x86_64" ]
     },
     build application { 
@@ -64,7 +64,7 @@
         ],
         addLibraries = [ "sync_ffq", "bench" ],
         addIncludes = [ "/lib/sync/sync/inc", "/lib/sync/sync/inc/backends", "/lib/sync/umpq", "includes" ],
-        addCxxFlags = [ "-DLIBSYNC", "-DUSE_FFQ" ],
+        addCxxFlags = [ "-DSMLT", "-DUSE_FFQ" ],
         architectures = [ "x86_64" ]
     }
     

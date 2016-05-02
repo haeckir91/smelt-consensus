@@ -200,9 +200,9 @@ int main(int argc, char ** argv)
     }
     printf("\n");
     printf("############################################### \n");
-#ifdef LIBSYNC
+#ifdef SMLT
     if (algo_below != ALG_NONE) {
-        printf("Cant not start with LIBSYNC and an protocol on the lower layer \n");
+        printf("Cant not start with SMLT and an protocol on the lower layer \n");
         exit(0);
     }
 #endif
@@ -218,12 +218,13 @@ int main(int argc, char ** argv)
                    client_cores,
                    exec_fn);
 
-#ifdef LIBSYNC
+/*
+#ifdef SMLT
     if (topo > 0) {
         switch_topo_to_idx(topo);  
     }
 #endif
-
+*/
     sleep(5);
 #ifdef DEBUG
     consensus_bench_clients_init(num_cores, client_cores, num_clients, 

@@ -69,8 +69,8 @@ static void* measure_thread(void* args)
                     get_conf_interval(&(c->rt[run-1])), c->request_count);
             init_stats(&(c->rt[run]));
             if (c->id == 0) {
-                printf("###############################################################");
-                printf("######################## \n");
+                printf("###############################################################"
+                       "######################## \n");
             }
         }
         c->first = false;

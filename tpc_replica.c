@@ -63,6 +63,7 @@ typedef struct tpc_replica_t{
     uint8_t started_from_id;
     uint8_t *cores;
     uint8_t current_core;
+    uint8_t leader;
 
 } tpc_replica_t;
 
@@ -219,7 +220,6 @@ void message_handler_loop_tpc(void)
     struct smlt_msg* message = smlt_message_alloc(56);
     if (tpc_replica.id == 0) {
         int j = 0;
-        int child_count[tpc_replica.num_clients];
         
         uint32_t* nidx;
         uint32_t num_c;     
@@ -231,7 +231,6 @@ void message_handler_loop_tpc(void)
         int* cores = (int*) malloc(sizeof(int)*tpc_replica.num_clients+num_c);
         for (int i = 0; i < tpc_replica.num_clients;i++) {
             cores[i] = tpc_replica.clients[i];
-            child_count[i] = 0;
         }
 
         for (int i = 0; i < num_c; i++) {
@@ -240,27 +239,24 @@ void message_handler_loop_tpc(void)
 
 
         while (true) {
-            if (smlt_can_recv(cores[j])) {
-                err = smlt_recv(cores[j], message);
-                if (smlt_err_is_fail(err)) {
-                    // TODO
-                }
-     
-                if (get_tag(&message->data[0]) == SETUP_TAG) {
+            if (smlt_can_recv(cores[j]) || smlt_reduce_can_recv(ctx)) {
+                if (smlt_reduce_can_recv(ctx)) {
+                    smlt_reduce(ctx, message, message, operation);
                     message_handler_tpc(message);
                 } else {
-                    if (!is_client(cores[j])) {
-                       child_count[get_client_id(&message->data[0])]++;                    
-                       if (child_count[get_client_id(&message->data[0])] == (num_c)) {
-                            child_count[get_client_id(&message->data[0])] = 0;
-                            set_tag(&message->data[0], TPC_RDY);
-                            message_handler_tpc(message);
-                       } 
-                    } else {
-                        message_handler_tpc(message);
+                    if (cores[j] == tpc_replica.current_core) {
+                        j++;
+                        j = j % (tpc_replica.num_clients+num_c);
+                        continue;
                     }
-               }
 
+                    err = smlt_recv(cores[j], message);
+                    if (smlt_err_is_fail(err)) {
+                        // TODO
+                    }
+
+                    message_handler_tpc(message);
+                }
             }
 
             j++;
@@ -303,6 +299,12 @@ void message_handler_loop_tpc(void)
     
         while (true) {
             if (smlt_can_recv(all_cores[j])) {
+                if (all_cores[j] == tpc_replica.current_core) {
+                    j++;
+                    j = j % (tpc_replica.num_clients+ tpc_replica.num_clients);
+                    continue;
+                }
+
                 err = smlt_recv(all_cores[j], message);
                 if (smlt_err_is_fail(err)) {
                     // TODO;
@@ -400,7 +402,7 @@ static void handle_request(struct smlt_msg* msg)
         smlt_broadcast(ctx, msg);
 #else
         for (int i = 1; i < tpc_replica.num_replicas; i++) {
-            err = smlt_send(tpc_replica.replicas[0], msg);
+            err = smlt_send(tpc_replica.replicas[i], msg);
             if (smlt_err_is_fail(err)) {
                 // TODO
             }

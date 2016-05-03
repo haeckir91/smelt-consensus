@@ -108,7 +108,7 @@ static void print_results_tpc(tpc_replica_t* rep) {
 
     init_stats(&avg);
     char* f_name = (char*) malloc(sizeof(char)*100);
-#ifdef SMELT
+#ifdef SMLT
     sprintf(f_name, "results/tp_%s_tpc_num_%d_numc_%d", "adaptivetree", 
             rep->num_replicas, rep->num_clients);
 #else
@@ -208,20 +208,26 @@ bool is_client(int n)
     return false;
 }
 
+errval_t operation(struct smlt_msg* m1, struct smlt_msg* m2)
+{
+    return 0;
+}
+
 void message_handler_loop_tpc(void)
 {
     errval_t err;
-
     struct smlt_msg* message = smlt_message_alloc(56);
     if (tpc_replica.id == 0) {
         int j = 0;
         int child_count[tpc_replica.num_clients];
         
-        int num_c;
-        int* nidx;
-        mp_get_children(tpc_replica.replicas[0],
-                        &num_c, &nidx);
-        
+        uint32_t* nidx;
+        uint32_t num_c;     
+
+        struct smlt_topology_node* node;
+        node = smlt_topology_node_by_id(topo, tpc_replica.current_core);
+        nidx = smlt_topology_node_children_ids(node, &num_c);
+
         int* cores = (int*) malloc(sizeof(int)*tpc_replica.num_clients+num_c);
         for (int i = 0; i < tpc_replica.num_clients;i++) {
             cores[i] = tpc_replica.clients[i];
@@ -235,7 +241,11 @@ void message_handler_loop_tpc(void)
 
         while (true) {
             if (smlt_can_recv(cores[j])) {
-                err = smlt_recv(cores[j], message);      
+                err = smlt_recv(cores[j], message);
+                if (smlt_err_is_fail(err)) {
+                    // TODO
+                }
+     
                 if (get_tag(&message->data[0]) == SETUP_TAG) {
                     message_handler_tpc(message);
                 } else {
@@ -262,9 +272,9 @@ void message_handler_loop_tpc(void)
         while (true) {
             // TODO context
             smlt_broadcast(ctx, message);
-            if (get_tag(message->data[0]) == TPC_PREP) {
-                set_tag(message->data[0], TPC_RDY);
-                smlt_reduction(ctx, message);
+            if (get_tag(message->data) == TPC_PREP) {
+                set_tag(message->data, TPC_RDY);
+                smlt_reduce(ctx, message, message, operation);
             } else {
                 message_handler_tpc(message);
             }

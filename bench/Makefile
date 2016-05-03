@@ -11,7 +11,7 @@ CFLAGS    = -g -Wall -std=c99
 CFLAGS   += -DLIBNUMA_ -lnuma -lm
 CFLAGS   += -D_GNU_SOURCE -pthread
 
-SMLT_FLAG = -DSMELT=1
+SMLT_FLAG = -DSMLT=1
 
 %.o:: %.c
 	$(C) $(CFLAGS) $(LIB) $(INC_DIR) -o $@ -c $< 

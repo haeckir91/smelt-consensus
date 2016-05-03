@@ -340,7 +340,6 @@ void consensus_init(
         return;
     }
 
-    struct smlt_topology *topo = NULL;
     smlt_topology_create(model, "adaptivetree", &topo);
     err = smlt_context_create(topo, &ctx);
     if (smlt_err_is_fail(err)) {
@@ -405,7 +404,7 @@ void consensus_bench_clients_init(uint8_t num_cores,
                                   uint64_t sleep_time,
                                   uint8_t protocol,
                                   uint8_t protocol_below,
-                                  uint8_t topo,
+                                  uint8_t topo2,
                                   uint8_t* replica_cores)
 {
     errval_t err;
@@ -419,7 +418,7 @@ void consensus_bench_clients_init(uint8_t num_cores,
         args[i].dummy = false;
         args[i].protocol = protocol;
         args[i].protocol_below = protocol_below;
-        args[i].topo = topo;
+        args[i].topo = topo2;
         if (protocol != ALG_1PAXOS) {
             args[i].leader = replica_cores[0];
             if (protocol != ALG_CHAIN) {
@@ -428,20 +427,19 @@ void consensus_bench_clients_init(uint8_t num_cores,
                 args[i].recv_from = replica_cores[num_replicas-1];
             }
         } else { 
-            int numa = numa_node_of_cpu(cores[i]);
-//#ifdef SMELT
+#ifdef SMLT
             args[i].leader = replica_cores[1];
             args[i].recv_from = replica_cores[1];
-/*#else
+#else
             args[i].leader = replica_cores[0];
             args[i].recv_from = replica_cores[0];
 #endif
-*/
+#ifdef KVS
+            int numa = numa_node_of_cpu(cores[i]);
             if ((numa == 1) || (numa == 0)) {
-                numa = rand() % (num_replicas-2);
+                //numa = rand() % (num_replicas-2);
                 numa += 2;
             }
-#ifdef KVS
             printf("Numa %d \n", numa);
             args[i].recv_from = replica_cores[numa];
 #endif

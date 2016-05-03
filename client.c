@@ -232,7 +232,7 @@ static void print_results_file(void) {
 #ifdef SMLT
     sprintf(f_name, "results/client_id_%d_algo_%d_below_%d_%s_num_%d", 
             client->id, client->algo, client->algo_below, 
-            topo_get_name(), client->num_clients);
+            "adaptivetree", client->num_clients);
 #else
     sprintf(f_name, "results/client_id_%d_algo_%d_below_%d_num_%d", 
                     client->id, client->algo, client->algo_below, 

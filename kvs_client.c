@@ -92,8 +92,7 @@ static void print_results_file(void) {
     char* f_name = (char*) malloc(sizeof(char)*100);
 #ifdef SMLT
     sprintf(f_name, "results/client_kvs_%s_id_%d_num_%d",
-                    topo_get_name(), client->id, client->num_clients);
-
+                    "adaptivetree", client->id, client->num_clients);
 #else
     sprintf(f_name, "results/client_kvs_id_%d_num_%d",
                     client->id, client->num_clients);

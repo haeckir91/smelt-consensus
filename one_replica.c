@@ -324,28 +324,40 @@ void message_handler_loop_onepaxos(void)
             cores[i] = replica.clients[i];
         }
 
+       
         struct smlt_topology_node* parent;
         struct smlt_topology_node* node;
-        node = smlt_topology_node_get_by_id(topo, replica.current_core);
-        parent = smlt_topology_node_get_parent(node);
+
+        node = smlt_topology_node_by_id(topo, replica.current_core);
+        parent = smlt_topology_node_parent(node);
+
+        uint32_t parent_id = smlt_topology_node_get_id(parent);
         for (int i = replica.num_clients; i < replica.num_clients*2; i++) {
-            cores[replica.num_clients] = smlt_topology_node_get_id(node);
+            cores[replica.num_clients] = parent_id;
         }
 
         int num_cores = 2*replica.num_clients;
         while (true) {
             for (int i = 0; i < num_cores; i++) {
-                if (cores[i] == replica.current_core){
+                if (replica.current_core == cores[i]) {
                     continue;
                 }
+
                 if (smlt_can_recv(cores[i])) {
                     err = smlt_recv(cores[i], message);
-                    if (cores[i] != (uint64_t) smlt_topology_node_get_id(node)) {
+                    if (smlt_err_is_fail(err)) {
+                        // TODO
+                    }
+
+                    if (get_tag(message->data) == SETUP_TAG) {
+                        printf("Client Setup \n");
                         message_handler_onepaxos(message);
                     } else {
+                        // TODO need to be able to handle the first message seperately
+                        message_handler_onepaxos(message);
                         smlt_broadcast(ctx, message);
                         message_handler_onepaxos(message);
-                    }
+                    } 
                 }
             }
         }
@@ -359,7 +371,7 @@ void message_handler_loop_onepaxos(void)
 
     } else {
         while (true) {
-            smlt_broadcast(ctx, message)
+            smlt_broadcast(ctx, message);
             message_handler_onepaxos(message);
             if (message->data[3] == replica.current_core) {
                 set_tag(message->data, RESP_TAG);
@@ -381,12 +393,15 @@ void message_handler_loop_onepaxos(void)
             all_cores[i] = replica.replicas[i];
         }
 
-        for (int i = replica.num_replicas; i < (replica.num_replicas+ replica.num_clients); i++) {
+        for (int i = replica.num_replicas; i < 
+                (replica.num_replicas+ replica.num_clients); i++) {
             all_cores[i] = replica.clients[(i-replica.num_replicas)];
         }
 
         while (true) {
             if (all_cores[j] == replica.current_core){
+                    j++;
+                    j = j % (replica.num_replicas + replica.num_clients);
                     continue;
             }
 
@@ -417,7 +432,7 @@ void message_handler_loop_onepaxos(void)
 
         while (true) {
             if (smlt_can_recv(replica.replicas[replica.current_acceptor])) {
-                smlt_recv(replica.replicas[replica.current_acceptor], message);
+                err = smlt_recv(replica.replicas[replica.current_acceptor], message);
                 if (smlt_err_is_fail(err)) {
                     // TODO
                 }

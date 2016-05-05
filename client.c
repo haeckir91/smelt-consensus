@@ -230,12 +230,12 @@ static void print_results_file(void) {
 
     char* f_name = (char*) malloc(sizeof(char)*100);
 #ifdef SMLT
-    sprintf(f_name, "results/client_id_%d_algo_%d_below_%d_%s_num_%d", 
-            client->id, client->algo, client->algo_below, 
+    sprintf(f_name, "results/rep_%d/client_id_%d_algo_%d_below_%d_%s_num_%d", 
+            client->num_replicas, client->id, client->algo, client->algo_below, 
             "adaptivetree", client->num_clients);
 #else
-    sprintf(f_name, "results/client_id_%d_algo_%d_below_%d_num_%d", 
-                    client->id, client->algo, client->algo_below, 
+    sprintf(f_name, "results/rep_%d/client_id_%d_algo_%d_below_%d_num_%d", 
+            client->num_replicas, client->id, client->algo, client->algo_below, 
                     client->num_clients);
 #endif
 #ifndef BARRELFISH

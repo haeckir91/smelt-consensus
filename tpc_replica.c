@@ -237,13 +237,13 @@ void message_handler_loop_tpc(void)
             cores[i+tpc_replica.num_clients] = nidx[i];
         }
 
-
         while (true) {
             if (smlt_can_recv(cores[j]) || smlt_reduce_can_recv(ctx)) {
                 if (smlt_reduce_can_recv(ctx)) {
                     smlt_reduce(ctx, message, message, operation);
                     message_handler_tpc(message);
-                } else {
+                }
+                if (smlt_can_recv(cores[j])) {
                     if (cores[j] == tpc_replica.current_core) {
                         j++;
                         j = j % (tpc_replica.num_clients+num_c);
@@ -256,9 +256,9 @@ void message_handler_loop_tpc(void)
                     }
 
                     message_handler_tpc(message);
+
                 }
             }
-
             j++;
 
             j = j % (tpc_replica.num_clients+num_c);
@@ -296,7 +296,7 @@ void message_handler_loop_tpc(void)
             tpc_replica.num_clients); i++) {
             all_cores[i] = tpc_replica.clients[(i-tpc_replica.num_replicas)];
         }
-    
+
         while (true) {
             if (smlt_can_recv(all_cores[j])) {
                 if (all_cores[j] == tpc_replica.current_core) {
@@ -317,7 +317,6 @@ void message_handler_loop_tpc(void)
         }
 
     } else {
-       
         while (true) {
             if (smlt_can_recv(tpc_replica.replicas[0])) {
                 err = smlt_recv(tpc_replica.replicas[0], message);
@@ -478,6 +477,7 @@ static void handle_ready(struct smlt_msg* msg)
 
         if (tpc_replica.ready_counter[get_client_id(msg->data)] >= 
              (tpc_replica.num_replicas-1)) {
+
             // TODO Broadcast COMMIT
             set_tag(msg->data, TPC_COM);
             tpc_replica.index++;
@@ -488,7 +488,7 @@ static void handle_ready(struct smlt_msg* msg)
                 if (smlt_err_is_fail(err)) {
                     // TODO
                 }
-            }
+            } 
 #ifdef VERIFY
             rid_history[replica.index] = msg[2];
             cid_history[replica.index] = msg[1];
@@ -502,6 +502,7 @@ static void handle_ready(struct smlt_msg* msg)
 
             if (tpc_replica.level == NODE_LEVEL) {
                 set_tag(msg->data, RESP_TAG);
+
                 err = smlt_send(tpc_replica.clients[get_client_id(msg->data)], msg);
                 if (smlt_err_is_fail(err)) {
                     // TODO

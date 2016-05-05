@@ -344,7 +344,6 @@ void message_handler_loop_onepaxos(void)
                 }
 
                 if (smlt_can_recv(cores[i]) || smlt_broadcast_can_recv(ctx)) {
-                    /*
                     if (smlt_broadcast_can_recv(ctx)) {
                         smlt_broadcast(ctx, message);
                         message_handler_onepaxos(message);
@@ -355,8 +354,7 @@ void message_handler_loop_onepaxos(void)
                         }
                         message_handler_onepaxos(message);
                     }
-                    */
-                    //*/
+                    /*
                     err = smlt_recv(cores[i], message);
                     if (smlt_err_is_fail(err)) {
                         // TODO
@@ -371,7 +369,7 @@ void message_handler_loop_onepaxos(void)
                         smlt_broadcast(ctx, message);
                         message_handler_onepaxos(message);
                     } 
-                    //*/
+                    */
                 }
             }
         }

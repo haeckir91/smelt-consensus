@@ -20,7 +20,9 @@
 #include <sched.h>
 #include <smlt.h>
 #include <smlt_message.h>
+#include <smlt_debug.h>
 #include <stdbool.h>
+#include <sys/stat.h>
 
 #include "client.h"
 #include "consensus.h"
@@ -226,20 +228,35 @@ void set_request_id(uintptr_t* msg, uint32_t client_id)
     result[0] = client_id;
 }
 
+#define F_NAME_LEN 100
 static void print_results_file(void) {
 
-    char* f_name = (char*) malloc(sizeof(char)*100);
+    char* f_name = (char*) malloc(sizeof(char)*F_NAME_LEN);
+    COND_PANIC(f_name!=NULL, "failed to allocate memory for filename");
+
+    // Check if result directory exists
+    struct stat st;
+    snprintf(f_name, F_NAME_LEN, "results/rep_%d/", client->num_replicas);
+    if (stat(f_name, &st) != 0) {
+
+        printf("Making result directory\n");
+        mkdir(f_name, 0777);
+    }
+
 #ifdef SMLT
-    sprintf(f_name, "results/rep_%d/client_id_%d_algo_%d_below_%d_%s_num_%d", 
-            client->num_replicas, client->id, client->algo, client->algo_below, 
+    snprintf(f_name, F_NAME_LEN,
+             "results/rep_%d/client_id_%d_algo_%d_below_%d_%s_num_%d",
+            client->num_replicas, client->id, client->algo, client->algo_below,
             "adaptivetree", client->num_clients);
 #else
-    sprintf(f_name, "results/rep_%d/client_id_%d_algo_%d_below_%d_num_%d", 
-            client->num_replicas, client->id, client->algo, client->algo_below, 
+    snprintf(f_name, F_NAME_LEN,
+             "results/rep_%d/client_id_%d_algo_%d_below_%d_num_%d",
+            client->num_replicas, client->id, client->algo, client->algo_below,
                     client->num_clients);
 #endif
 #ifndef BARRELFISH
     FILE* f = fopen(f_name, "a");
+    COND_PANIC(f!=NULL, "could not open result file");
 #endif
     RESULT_PRINTF(f, "Algo %d algo_below %d num_clients %d \n", 
             client->algo, client->algo_below,

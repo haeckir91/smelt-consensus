@@ -164,6 +164,7 @@ void message_handler_loop_broadcast(void)
 {
     errval_t err;
     struct smlt_msg* message = smlt_message_alloc(56);
+    COND_PANIC(message!=NULL, "Failed to allocate Smelt message");
     if (replica.id == 0) {
         int j = 0;
     
@@ -171,7 +172,7 @@ void message_handler_loop_broadcast(void)
             if (smlt_can_recv(replica.clients[j])) {
                 err = smlt_recv(replica.clients[j], message);
                 if (smlt_err_is_fail(err)){
-                    // TODO
+                    panic("Error when calling smlt_recv for replica j");
                 }
                 message_handler_broadcast(message);
             }    
@@ -185,7 +186,7 @@ void message_handler_loop_broadcast(void)
         while (true) {
             err = smlt_broadcast(ctx, message);
             if (smlt_err_is_fail(err)){
-                // TODO
+                panic("Error when calling smlt_recv");
             }
             message_handler_broadcast(message);
         }
@@ -196,6 +197,7 @@ void message_handler_loop_broadcast(void)
 {
     errval_t err;
     struct smlt_msg* message = smlt_message_alloc(56);
+    COND_PANIC(message!=NULL, "Failed to allocate Smelt message");
     if (replica.id == 0) {
         int j = 0;
     
@@ -203,7 +205,7 @@ void message_handler_loop_broadcast(void)
             if (smlt_can_recv(replica.clients[j])) {
                 err = smlt_recv(replica.clients[j], message);   
                 if (smlt_err_is_fail(err)) {
-                    // TODO
+                    panic("Error when calling smlt_recv for replica j");
                 }
                 message_handler_broadcast(message);
             }    
@@ -218,7 +220,7 @@ void message_handler_loop_broadcast(void)
             if (smlt_can_recv(replica.replicas[0])) {
                 err = smlt_recv(replica.replicas[0], message);
                 if (smlt_err_is_fail(err)) {
-                    // TODO
+                    panic("Error when calling smlt_recv");
                 }
 
                 message_handler_broadcast(message);

@@ -74,6 +74,8 @@ int main(int argc, char ** argv)
         printf("Taking default Protocols \n");
     }
 
+    printf("Using config path: %s\n", config_path);
+
     FILE* f;
     f = fopen(config_path, "rw");
     

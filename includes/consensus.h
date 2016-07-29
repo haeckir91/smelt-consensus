@@ -26,7 +26,6 @@
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
 
 #define MEASURE_TP
-//#define KVS
 
 #define CORE_LEVEL 0
 #define NODE_LEVEL 1

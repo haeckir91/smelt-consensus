@@ -5,5 +5,7 @@ latex/*
 cscope.files
 bench/start_bench_smelt
 bench/start_bench
+bench/start_bench_smelt_kvs
+bench/start_bench_kvs
 *.so
 *.a

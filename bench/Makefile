@@ -3,9 +3,11 @@ all: objs clean start_bench start_bench_smelt
 C:=gcc
 MAKEDEPEND:=makedepend -Y
 
-INC_DIR = -I../includes/ -I../../smelt-runtime-system/inc/backends/ -I../../smelt-runtime-system/inc/ -I../../umpq/ 
+SMELTDIR=../../../
 
-LIB = -L../../smelt-runtime-system/
+INC_DIR = -I../includes/ -I$(SMELTDIR)/inc/backends/ -I$(SMELTDIR)/inc/ -I../../umpq/
+
+LIB = -L$(SMELTDIR)/
 
 CFLAGS    = -g -Wall -std=c99
 CFLAGS   += -DLIBNUMA_ -lnuma -lm
